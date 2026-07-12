@@ -1,3 +1,14 @@
+---
+title: RootSearch
+emoji: 🔍
+colorFrom: blue
+colorTo: indigo
+sdk: gradio
+sdk_version: 4.36.1
+app_file: app.py
+pinned: false
+---
+
 # 🔥 FUCKEN SEARCH - محرك البحث الخارق 🔥
 
 ### Deep Search Engine - يبحث في أعماق الإنترنت ويحلل كل شيء
