@@ -59,6 +59,12 @@ async def home(request: Request):
     )
 
 
+@app.head("/")
+async def home_head():
+    """استجابة سريعة لفحص حالة الخادم من قبل المنصة"""
+    return HTMLResponse(content="", status_code=200)
+
+
 @app.get("/api/search")
 async def api_search(
     q: str = Query(..., min_length=1, max_length=500, description="استعلام البحث"),
