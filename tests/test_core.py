@@ -173,7 +173,7 @@ class TestFastAPIApp(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertEqual(data["status"], "running")
-        self.assertEqual(data["name"], "Fucken Search")
+        self.assertEqual(data["name"], "RootSearch")
 
 
 class TestSafeResolver(unittest.IsolatedAsyncioTestCase):

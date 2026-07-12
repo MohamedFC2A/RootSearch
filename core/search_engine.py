@@ -1,25 +1,38 @@
 """
-Fucken Search - Search Engine Core Module
+RootSearch - Search Engine Core Module
 محرك البحث الخارق: قلب نظام البحث في أعماق الإنترنت
-يدعم محركات متعددة بدون API Keys
+يدعم محركات متعددة بدون API Keys — مع GraphCrawler وon_event hook للشجرة الحية
 """
 
+from __future__ import annotations
+
 import asyncio
+import heapq
+import math
 import random
 import re
-import urllib.parse
-from typing import List, Dict, Optional, Any
-from dataclasses import dataclass, field
-from datetime import datetime
-import time
 import socket
 import ipaddress
+import urllib.parse
+from collections import defaultdict
+from dataclasses import dataclass, field
+from datetime import datetime
+from typing import Any, Callable, Dict, List, Optional, Set
+import time
 
 import aiohttp
 import aiohttp.abc
 from bs4 import BeautifulSoup
 
+try:
+    from fake_useragent import UserAgent as _FakeUA
+    _fua = _FakeUA()
+except Exception:
+    _fua = None
+
 from config import config
+
+EventCallback = Optional[Callable[[str, Dict[str, Any]], None]]
 
 
 class SafeResolver(aiohttp.abc.AbstractResolver):
@@ -75,18 +88,133 @@ class SearchResult:
     metadata: Dict[str, Any] = field(default_factory=dict)
 
 
+# ─────────────────────────────────────────────
+#  GRAPH CRAWLER — BFS/DFS with Semantic Scoring
+# ─────────────────────────────────────────────
+
+class GraphCrawler:
+    """
+    Intelligent graph-based source-discovery crawler.
+    Uses BFS with semantic relevance scoring to prioritise
+    the most query-relevant URLs from a seed set.
+    Score = TF-weighted keyword overlap + domain authority signal.
+    """
+
+    # High-authority TLD/domain suffixes (boost factor 1.4x)
+    _AUTHORITY_BOOSTS: Dict[str, float] = {
+        "wikipedia.org": 1.5, "britannica.com": 1.4, "reuters.com": 1.4,
+        "bbc.com": 1.3, "nature.com": 1.4, "science.org": 1.4,
+        "github.com": 1.3, "stackoverflow.com": 1.2, ".edu": 1.3, ".gov": 1.3,
+    }
+
+    def __init__(self, query: str, max_nodes: int = 60,
+                 on_event: EventCallback = None):
+        self._query_terms = self._tokenise(query)
+        self._max_nodes = max_nodes
+        self._visited: Set[str] = set()
+        self._on_event = on_event
+
+    @staticmethod
+    def _tokenise(text: str) -> List[str]:
+        stop = {
+            "the", "of", "and", "a", "to", "in", "is", "it", "was", "for",
+            "من", "في", "على", "إلى", "عن", "مع", "هذا", "أن",
+        }
+        return [w.lower() for w in re.findall(r"\w+", text)
+                if len(w) > 1 and w.lower() not in stop]
+
+    def _semantic_score(self, url: str, title: str, snippet: str) -> float:
+        """Compute relevance score for a candidate URL."""
+        text = f"{title} {snippet} {url}".lower()
+        tokens = self._tokenise(text)
+        if not tokens:
+            return 0.0
+        token_freq: Dict[str, int] = defaultdict(int)
+        for t in tokens:
+            token_freq[t] += 1
+        total = len(tokens)
+
+        # TF-weighted overlap with query terms
+        tf_sum = sum(
+            math.log(1 + token_freq[qt]) / math.log(1 + total)
+            for qt in self._query_terms if qt in token_freq
+        )
+        raw_score = tf_sum / max(len(self._query_terms), 1)
+
+        # Domain authority boost
+        domain = urllib.parse.urlparse(url).netloc.lower()
+        authority = 1.0
+        for suffix, boost in self._AUTHORITY_BOOSTS.items():
+            if domain.endswith(suffix) or domain == suffix:
+                authority = boost
+                break
+
+        return round(raw_score * authority, 4)
+
+    def prioritise(self, candidates: List[SearchResult]) -> List[SearchResult]:
+        """
+        Score and return candidates sorted by semantic relevance (BFS frontier ordering).
+        Uses a max-heap keyed by score for O(n log n) sorting.
+        """
+        scored: List[tuple] = []
+        for r in candidates:
+            if r.url in self._visited:
+                continue
+            score = self._semantic_score(r.url, r.title, r.snippet)
+            r.relevance_score = max(r.relevance_score, score)
+            heapq.heappush(scored, (-score, id(r), r))
+            self._visited.add(r.url)
+
+        sorted_results = []
+        while scored and len(sorted_results) < self._max_nodes:
+            neg_score, _, result = heapq.heappop(scored)
+            sorted_results.append(result)
+
+        if self._on_event:
+            try:
+                self._on_event("node_status_update", {
+                    "nodeId": "source_discovery",
+                    "status": "success",
+                    "label": f"GraphCrawler scored {len(sorted_results)} sources",
+                    "metadata": {"total_candidates": len(candidates)},
+                })
+            except Exception:
+                pass
+
+        return sorted_results
+
+
+# ─────────────────────────────────────────────
+#  SEARCH ENGINE
+# ─────────────────────────────────────────────
+
 class SearchEngine:
-    """محرك البحث الأساسي - يدعم محركات متعددة"""
-    
-    def __init__(self):
+    """محرك البحث الأساسي — يدعم 6 محركات مع on_event hook وGraphCrawler"""
+
+    def __init__(self, on_event: EventCallback = None):
         self.session: Optional[aiohttp.ClientSession] = None
         self.results: List[SearchResult] = []
-        self._user_agent_index = 0
-    
+        self._ua_index = 0
+        self._on_event = on_event
+
+    # ── Event emission ────────────────────────────────────────────
+
+    def _emit(self, event_type: str, payload: Dict[str, Any]) -> None:
+        if self._on_event:
+            try:
+                self._on_event(event_type, payload)
+            except Exception:
+                pass
+
     def _get_next_user_agent(self) -> str:
-        """تغيير وكيل المستخدم بشكل دوري للتخفي"""
-        ua = config.user_agents[self._user_agent_index]
-        self._user_agent_index = (self._user_agent_index + 1) % len(config.user_agents)
+        """Platform-aware UA cycling via fake-useragent, falls back to config list."""
+        if _fua:
+            try:
+                return _fua.random
+            except Exception:
+                pass
+        ua = config.user_agents[self._ua_index]
+        self._ua_index = (self._ua_index + 1) % len(config.user_agents)
         return ua
     
     async def _get_session(self) -> aiohttp.ClientSession:
@@ -99,7 +227,8 @@ class SearchEngine:
         return self.session
     
     async def _make_request(self, url: str, headers: Optional[Dict] = None, 
-                           params: Optional[Dict] = None, method: str = "GET") -> Optional[str]:
+                           params: Optional[Dict] = None, data: Optional[Dict] = None,
+                           method: str = "GET") -> Optional[str]:
         """إجراء طلب HTTP مع إعادة المحاولة"""
         session = await self._get_session()
         
@@ -116,7 +245,7 @@ class SearchEngine:
         
         for attempt in range(3):  # 3 محاولات كحد أقصى
             try:
-                async with session.request(method, url, headers=headers, params=params) as response:
+                async with session.request(method, url, headers=headers, params=params, data=data) as response:
                     if response.status == 200:
                         return await response.text()
                     elif response.status == 429:  # Rate limited
@@ -134,79 +263,94 @@ class SearchEngine:
         return None
     
     async def search_duckduckgo(self, query: str, num_results: int = None) -> List[SearchResult]:
-        """البحث عبر DuckDuckGo (بدون API Key)"""
+        """البحث عبر DuckDuckGo (بدون API Key مع دعم التصفح المتعدد المتقدم)"""
         if num_results is None:
             num_results = config.results_per_engine
         
         results = []
-        max_retries = 3
+        seen_urls = set()
         
-        for retry in range(max_retries):
-            try:
-                # استخدام واجهة DuckDuckGo HTML (بدون API)
-                url = f"https://html.duckduckgo.com/html/"
-                params = {
-                    "q": query,
-                    "s": "0",
-                    "o": "json",
-                    "api": "/d.js",
-                }
-                
-                headers = {
-                    "User-Agent": self._get_next_user_agent(),
-                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                    "Accept-Language": "en-US,en;q=0.5",
-                    "Referer": "https://duckduckgo.com/",
-                }
-                
-                html = await self._make_request(url, headers=headers, params=params)
-                if not html:
-                    if retry < max_retries - 1:
-                        await asyncio.sleep(2 ** retry)
-                        continue
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/110.0",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.5",
+            "Referer": "https://html.duckduckgo.com/",
+        }
+        
+        # 1. جلب الصفحة الأولى (GET)
+        vqd = None
+        try:
+            url = "https://html.duckduckgo.com/html/"
+            params = {"q": query}
+            html = await self._make_request(url, headers=headers, params=params, method="GET")
+            if html:
+                vqd = self._parse_ddg_html(html, results, seen_urls)
+        except Exception:
+            pass
+            
+        # 2. جلب الصفحات التالية (POST) باستخدام vqd المستخرج لزيادة عدد النتائج
+        if vqd and len(results) < num_results:
+            for page_offset in ["10", "24"]:
+                if len(results) >= num_results:
                     break
-                
-                soup = BeautifulSoup(html, 'html.parser')
-                
-                # استخراج النتائج من HTML
-                for i, result_div in enumerate(soup.select('.result'), 1):
-                    if len(results) >= num_results:
-                        break
-                    
-                    title_elem = result_div.select_one('.result__title a')
-                    snippet_elem = result_div.select_one('.result__snippet')
-                    
-                    if not title_elem:
-                        continue
-                    
-                    title = title_elem.get_text(strip=True)
-                    url_link = title_elem.get('href', '')
-                    
-                    # تنظيف URL من DuckDuckGo redirect
-                    if url_link and 'uddg=' in str(url_link):
-                        parsed = urllib.parse.urlparse(str(url_link))
-                        qs = urllib.parse.parse_qs(parsed.query)
-                        url_link = qs.get('uddg', [url_link])[0]
-                    
-                    snippet = snippet_elem.get_text(strip=True) if snippet_elem else ""
-                    
-                    results.append(SearchResult(
-                        title=title,
-                        url=url_link,
-                        snippet=snippet,
-                        source="duckduckgo",
-                        language="auto",
-                    ))
-                
-                if results:
+                try:
+                    data = {
+                        "q": query,
+                        "s": page_offset,
+                        "v": "l",
+                        "o": "json",
+                        "dc": page_offset,
+                        "api": "d.js",
+                        "vqd": vqd,
+                        "kl": "wt-wt"
+                    }
+                    html = await self._make_request(url, headers=headers, data=data, method="POST")
+                    if html:
+                        self._parse_ddg_html(html, results, seen_urls)
+                    await asyncio.sleep(0.5) # تجنب الحظر السريع
+                except Exception:
                     break
                     
-            except Exception as e:
-                if retry < max_retries - 1:
-                    await asyncio.sleep(2 ** retry)
-                    continue
+        return results[:num_results]
+
+    def _parse_ddg_html(self, html: str, results: List[SearchResult], seen_urls: set) -> Optional[str]:
+        """تحليل الـ HTML المستخرج من DuckDuckGo واستخراج النتائج والـ vqd"""
+        soup = BeautifulSoup(html, 'html.parser')
         
-        return results
+        for result_div in soup.select('.result'):
+            title_elem = result_div.select_one('.result__title a')
+            snippet_elem = result_div.select_one('.result__snippet')
+            
+            if not title_elem:
+                continue
+            
+            title = title_elem.get_text(strip=True)
+            url_link = title_elem.get('href', '')
+            
+            # تنظيف URL من DuckDuckGo redirect
+            if url_link and 'uddg=' in str(url_link):
+                parsed = urllib.parse.urlparse(str(url_link))
+                qs = urllib.parse.parse_qs(parsed.query)
+                url_link = qs.get('uddg', [url_link])[0]
+            
+            normalized_url = url_link.lower().rstrip('/')
+            if normalized_url in seen_urls:
+                continue
+            seen_urls.add(normalized_url)
+            
+            snippet = snippet_elem.get_text(strip=True) if snippet_elem else ""
+            
+            results.append(SearchResult(
+                title=title,
+                url=url_link,
+                snippet=snippet,
+                source="duckduckgo",
+                language="auto",
+            ))
+            
+        # استخراج vqd للاستخدام اللاحق
+        vqd_input = soup.find('input', {'name': 'vqd'})
+        return vqd_input.get('value') if vqd_input else None
     
     async def search_google(self, query: str, num_results: int = None) -> List[SearchResult]:
         """البحث عبر Google (بدون API - scraping)"""
@@ -436,20 +580,18 @@ class SearchEngine:
         return fallback_instances
 
     async def search_searx(self, query: str, num_results: int = None) -> List[SearchResult]:
-        """البحث عبر SearXNG (نسخة عامة مجانية بديناميكية جلب الخواديم)"""
+        """البحث عبر SearXNG (نسخة عامة مجانية مع استعلام متوازي سريع ومقاوم للتأخير)"""
         if num_results is None:
             num_results = config.results_per_engine
-        
-        results = []
         
         searx_instances = await self._get_searx_instances()
         random.shuffle(searx_instances)
         
+        # استعلام حتى 15 خادم في نفس الوقت لضمان السرعة وتخطي الخوادم المحجوبة
+        instances_to_try = searx_instances[:15]
         session = await self._get_session()
-        success_count = 0
-        for instance in searx_instances:
-            if success_count >= 3:
-                break
+        
+        async def query_instance(instance: str) -> List[SearchResult]:
             try:
                 search_url = f"{instance}/search"
                 params = {
@@ -459,30 +601,52 @@ class SearchEngine:
                     "categories": "general",
                     "pageno": "1",
                 }
-                
                 headers = {
                     "User-Agent": self._get_next_user_agent(),
                     "Accept": "application/json",
                 }
-                
                 async with session.get(search_url, params=params, headers=headers, 
-                                       timeout=aiohttp.ClientTimeout(total=8)) as resp:
+                                       timeout=aiohttp.ClientTimeout(total=4.5)) as resp:
                     if resp.status == 200:
                         data = await resp.json()
                         items = data.get("results", [])
-                        if items:
-                            for item in items[:num_results]:
-                                results.append(SearchResult(
+                        results_list = []
+                        for item in items[:num_results]:
+                            url = item.get("url", "")
+                            if url:
+                                results_list.append(SearchResult(
                                     title=item.get("title", ""),
-                                    url=item.get("url", ""),
+                                    url=url,
                                     snippet=item.get("content", ""),
                                     source=f"searx_{item.get('engine', 'unknown')}",
                                 ))
-                            success_count += 1
+                        return results_list
             except Exception:
-                continue
+                pass
+            return []
+
+        tasks = [asyncio.create_task(query_instance(inst)) for inst in instances_to_try]
         
-        return results
+        all_results = []
+        seen_urls = set()
+        
+        for coro in asyncio.as_completed(tasks):
+            res = await coro
+            if res:
+                for r in res:
+                    norm_url = r.url.lower().rstrip('/')
+                    if norm_url not in seen_urls:
+                        seen_urls.add(norm_url)
+                        all_results.append(r)
+                if len(seen_urls) >= num_results:
+                    break
+                    
+        # إلغاء المهام المتبقية فور توفر نتائج كافية
+        for t in tasks:
+            if not t.done():
+                t.cancel()
+                
+        return all_results[:num_results]
 
     async def search_wikipedia(self, query: str, num_results: int = None) -> List[SearchResult]:
         """البحث في Wikipedia (عربي وإنجليزي) كبديل مستقر فائق الأهمية"""
@@ -571,11 +735,17 @@ class SearchEngine:
         return unique_results[:config.max_final_results * 2]
 
     async def search_all(self, query: str, deep_search: bool = False) -> List[SearchResult]:
-        """البحث في جميع محركات البحث المتاحة بشكل متوازي"""
+        """بحث متوازي في كل المحركات + GraphCrawler semantic prioritisation"""
         self.results = []
-        
-        search_tasks = []
-        
+
+        self._emit("tree_node", {
+            "nodeId": "source_discovery",
+            "stage": "source_discovery",
+            "status": "pending",
+            "label": "Discovering sources...",
+            "parentId": "trigger",
+        })
+
         search_methods = {
             "duckduckgo": self.search_duckduckgo,
             "google": self.search_google,
@@ -584,30 +754,63 @@ class SearchEngine:
             "searx": self.search_searx,
             "wikipedia": self.search_wikipedia,
         }
-        
         engines_to_use = [e for e in config.search_engines if e in search_methods]
-        
-        async def search_with_timeout(engine_name: str, func, query: str) -> list:
+
+        async def search_with_timeout(engine_name: str, func) -> tuple:
+            self._emit("tree_node", {
+                "nodeId": f"engine_{engine_name}",
+                "stage": "source_discovery",
+                "status": "fetching",
+                "label": f"Querying {engine_name.capitalize()}...",
+                "parentId": "source_discovery",
+            })
             try:
-                return await asyncio.wait_for(func(query), timeout=15)
+                res = await asyncio.wait_for(func(query), timeout=15)
+                res = res or []
+                self._emit("node_status_update", {
+                    "nodeId": f"engine_{engine_name}",
+                    "status": "success" if res else "failed",
+                    "label": (
+                        f"{engine_name.capitalize()}: {len(res)} results"
+                        if res else f"{engine_name.capitalize()}: no results / blocked"
+                    ),
+                    "metadata": {"count": len(res)},
+                })
+                return engine_name, res
             except asyncio.TimeoutError:
-                print(f"[⏰] Engine '{engine_name}' timed out")
-                return []
-            except Exception as e:
-                print(f"[⚠️] Engine '{engine_name}' error: {type(e).__name__}")
-                return []
-        
-        for engine in engines_to_use:
-            search_tasks.append(search_with_timeout(engine, search_methods[engine], query))
-        
-        engine_results = await asyncio.gather(*search_tasks, return_exceptions=True)
-        
-        all_results = []
-        for results in engine_results:
-            if isinstance(results, list):
-                all_results.extend(results)
-        
-        self.results = self.deduplicate_and_sort(all_results)
+                self._emit("node_status_update", {
+                    "nodeId": f"engine_{engine_name}",
+                    "status": "failed",
+                    "label": f"{engine_name.capitalize()}: timed out",
+                })
+                return engine_name, []
+            except Exception as exc:
+                self._emit("node_status_update", {
+                    "nodeId": f"engine_{engine_name}",
+                    "status": "failed",
+                    "label": f"{engine_name.capitalize()}: {type(exc).__name__}",
+                })
+                return engine_name, []
+
+        tasks = [
+            asyncio.create_task(search_with_timeout(name, fn))
+            for name, fn in search_methods.items()
+            if name in engines_to_use
+        ]
+        engine_results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        all_results: List[SearchResult] = []
+        for item in engine_results:
+            if isinstance(item, tuple):
+                _, res = item
+                if isinstance(res, list):
+                    all_results.extend(res)
+
+        # ── GraphCrawler semantic prioritisation ──
+        crawler = GraphCrawler(query=query, max_nodes=120, on_event=self._on_event)
+        prioritised = crawler.prioritise(all_results)
+
+        self.results = self.deduplicate_and_sort(prioritised)
         return self.results
     
     async def close(self):

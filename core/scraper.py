@@ -1,57 +1,69 @@
 """
-Fucken Search - Deep Web Scraper Module
-متسلق المواقع الخارق: يسحب المحتوى من أعماق الصفحات
+RootSearch - High-Performance Resilient Fetching Engine
+محرك الجلب الخارق: Circuit Breaker + Proxy Rotation + Stealth Anti-Bot Framework
 """
 
+from __future__ import annotations
+
 import asyncio
+import enum
+import json
+import math
+import random
 import re
-from datetime import datetime
-from typing import List, Dict, Optional, Any
-from urllib.parse import urlparse, urljoin
 import socket
 import ipaddress
+from collections import defaultdict
+from datetime import datetime, timedelta
+from typing import Any, Callable, Dict, List, Optional, Tuple
+from urllib.parse import urlparse, urljoin
 
 import aiohttp
 import aiohttp.abc
 from bs4 import BeautifulSoup
 import trafilatura
-import trafilatura.settings as traf_settings
-import httpx
+
 try:
-    from fake_useragent import UserAgent
-    ua_generator = UserAgent()
+    from fake_useragent import UserAgent as _FakeUA
+    _ua_pool = _FakeUA()
 except Exception:
-    ua_generator = None
+    _ua_pool = None
 
 from config import config
 from core.search_engine import SearchResult
 
 
+# ─────────────────────────────────────────────
+#  SAFE DNS RESOLVER  (SSRF / DNS-Rebinding guard)
+# ─────────────────────────────────────────────
+
 class SafeResolver(aiohttp.abc.AbstractResolver):
-    """محلل أسماء نطاقات آمن يمنع SSRF و DNS Rebinding بشكل مطلق"""
-    
-    async def resolve(self, host: str, port: int = 0, family: int = socket.AF_INET) -> List[Dict[str, Any]]:
+    """Blocks loopback, private, multicast, and reserved IPs at DNS resolution time."""
+
+    async def resolve(self, host: str, port: int = 0,
+                      family: int = socket.AF_INET) -> List[Dict[str, Any]]:
         loop = asyncio.get_running_loop()
         try:
-            infos = await loop.getaddrinfo(host, port, family=family, type=socket.SOCK_STREAM)
-        except Exception as e:
-            raise OSError(f"DNS resolution failed for {host}: {e}")
-            
-        safe_infos = []
+            infos = await loop.getaddrinfo(host, port, family=family,
+                                           type=socket.SOCK_STREAM)
+        except Exception as exc:
+            raise OSError(f"DNS resolution failed for {host}: {exc}")
+
+        safe = []
         for info in infos:
             ip = info[4][0]
             try:
                 ip_obj = ipaddress.ip_address(ip)
-                # منع العناوين المحلية والخاصة والمحجوزة
-                if ip_obj.is_loopback or ip_obj.is_private or ip_obj.is_multicast or ip_obj.is_reserved:
+                if (ip_obj.is_loopback or ip_obj.is_private
+                        or ip_obj.is_multicast or ip_obj.is_reserved):
                     continue
-                safe_infos.append(info)
+                safe.append(info)
             except ValueError:
                 continue
-                
-        if not safe_infos:
-            raise OSError(f"Access denied: Private or invalid IP addresses are blocked for {host}")
-            
+
+        if not safe:
+            raise OSError(f"SSRF blocked: all IPs are private/reserved for {host}")
+
         return [{
             "hostname": host,
             "host": item[4][0],
@@ -59,113 +71,455 @@ class SafeResolver(aiohttp.abc.AbstractResolver):
             "family": item[0],
             "proto": item[2],
             "flags": socket.AI_NUMERICHOST,
-        } for item in safe_infos]
+        } for item in safe]
 
     async def close(self) -> None:
         pass
 
 
-class DeepScraper:
-    """متسلق المواقع العميق - يسحب المحتوى من أي صفحة ويب"""
-    
-    def __init__(self):
-        self.session: Optional[aiohttp.ClientSession] = None
-        self._user_agent_index = 0
-        self.semaphore = asyncio.Semaphore(config.max_concurrent_requests)
-    
-    def _get_next_user_agent(self) -> str:
-        if ua_generator:
+# ─────────────────────────────────────────────
+#  EXPONENTIAL BACKOFF WITH FULL JITTER
+# ─────────────────────────────────────────────
+
+def _backoff_delay(attempt: int, base: float = 1.0, cap: float = 30.0) -> float:
+    """
+    Full-jitter exponential backoff:
+        sleep = random(0, min(cap, base * 2^attempt))
+    Prevents thundering-herd on shared proxies / rate-limited endpoints.
+    """
+    ceiling = min(cap, base * (2 ** attempt))
+    return random.uniform(0, ceiling)
+
+
+# ─────────────────────────────────────────────
+#  CIRCUIT BREAKER
+# ─────────────────────────────────────────────
+
+class CBState(enum.Enum):
+    CLOSED = "closed"       # normal operation
+    OPEN = "open"           # blocking all calls
+    HALF_OPEN = "half_open" # testing recovery
+
+
+class CircuitBreaker:
+    """
+    Per-domain circuit breaker.
+    States: CLOSED → (too many failures) → OPEN → (recovery timeout) → HALF_OPEN → (success) → CLOSED
+    """
+
+    def __init__(self, failure_threshold: int = 4,
+                 recovery_timeout: float = 45.0,
+                 success_threshold: int = 2):
+        self._failure_threshold = failure_threshold
+        self._recovery_timeout = recovery_timeout
+        self._success_threshold = success_threshold
+
+        # per-domain tracking
+        self._failures: Dict[str, int] = defaultdict(int)
+        self._successes: Dict[str, int] = defaultdict(int)
+        self._state: Dict[str, CBState] = defaultdict(lambda: CBState.CLOSED)
+        self._opened_at: Dict[str, datetime] = {}
+
+    def get_state(self, domain: str) -> CBState:
+        state = self._state[domain]
+        if state == CBState.OPEN:
+            opened = self._opened_at.get(domain)
+            if opened and (datetime.utcnow() - opened).total_seconds() >= self._recovery_timeout:
+                self._state[domain] = CBState.HALF_OPEN
+                self._successes[domain] = 0
+                return CBState.HALF_OPEN
+        return self._state[domain]
+
+    def is_allowed(self, domain: str) -> bool:
+        return self.get_state(domain) != CBState.OPEN
+
+    def record_success(self, domain: str) -> None:
+        state = self.get_state(domain)
+        if state == CBState.HALF_OPEN:
+            self._successes[domain] += 1
+            if self._successes[domain] >= self._success_threshold:
+                self._state[domain] = CBState.CLOSED
+                self._failures[domain] = 0
+        elif state == CBState.CLOSED:
+            self._failures[domain] = max(0, self._failures[domain] - 1)
+
+    def record_failure(self, domain: str) -> None:
+        self._failures[domain] += 1
+        state = self.get_state(domain)
+        if state in (CBState.CLOSED, CBState.HALF_OPEN):
+            if self._failures[domain] >= self._failure_threshold:
+                self._state[domain] = CBState.OPEN
+                self._opened_at[domain] = datetime.utcnow()
+
+    def domain_status(self, domain: str) -> str:
+        return self.get_state(domain).value
+
+
+# Shared global circuit breaker (across all scraper instances)
+_circuit_breaker = CircuitBreaker(failure_threshold=4, recovery_timeout=45.0)
+
+
+# ─────────────────────────────────────────────
+#  PROXY ROTATOR
+# ─────────────────────────────────────────────
+
+class ProxyRotator:
+    """
+    Round-robin proxy rotation with health tracking.
+    Proxies are temporarily blacklisted after consecutive failures.
+    """
+
+    def __init__(self, proxies: Optional[List[str]] = None,
+                 max_failures: int = 3,
+                 blacklist_ttl: float = 120.0):
+        self._pool: List[str] = list(proxies or [])
+        self._index = 0
+        self._failures: Dict[str, int] = defaultdict(int)
+        self._blacklisted_until: Dict[str, float] = {}
+        self._max_failures = max_failures
+        self._blacklist_ttl = blacklist_ttl
+
+    def _is_healthy(self, proxy: str) -> bool:
+        until = self._blacklisted_until.get(proxy, 0)
+        if until > asyncio.get_event_loop().time():
+            return False
+        return True
+
+    def get_proxy(self) -> Optional[str]:
+        """Return next healthy proxy or None (direct connection)."""
+        if not self._pool:
+            return None
+        attempts = len(self._pool)
+        for _ in range(attempts):
+            proxy = self._pool[self._index % len(self._pool)]
+            self._index += 1
+            if self._is_healthy(proxy):
+                return proxy
+        return None  # all blacklisted — fall through to direct
+
+    def record_failure(self, proxy: str) -> None:
+        self._failures[proxy] += 1
+        if self._failures[proxy] >= self._max_failures:
+            loop_time = 0.0
             try:
-                return ua_generator.random
+                loop_time = asyncio.get_event_loop().time()
+            except RuntimeError:
+                import time
+                loop_time = time.monotonic()
+            self._blacklisted_until[proxy] = loop_time + self._blacklist_ttl
+            self._failures[proxy] = 0
+
+    def record_success(self, proxy: str) -> None:
+        self._failures[proxy] = 0
+
+    @property
+    def has_proxies(self) -> bool:
+        return bool(self._pool)
+
+
+# Global proxy rotator (populated from config if available)
+_proxy_rotator = ProxyRotator(
+    proxies=getattr(getattr(config, '__class__', None), 'proxies', None) or []
+)
+
+
+# ─────────────────────────────────────────────
+#  STEALTH HEADERS & TLS SPOOF
+# ─────────────────────────────────────────────
+
+# Realistic ordered Accept-* header sets mimicking Chrome 124 on Windows
+_CHROME_HEADER_SETS: List[Dict[str, str]] = [
+    {
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Cache-Control": "max-age=0",
+        "Sec-Ch-Ua": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+        "Sec-Ch-Ua-Mobile": "?0",
+        "Sec-Ch-Ua-Platform": '"Windows"',
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+        "Sec-Fetch-User": "?1",
+        "Upgrade-Insecure-Requests": "1",
+        "Connection": "keep-alive",
+        "DNT": "1",
+    },
+    {
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-GB,en;q=0.9,ar;q=0.8",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Sec-Ch-Ua": '"Firefox";v="125", "Not:A-Brand";v="8"',
+        "Sec-Ch-Ua-Mobile": "?0",
+        "Sec-Ch-Ua-Platform": '"macOS"',
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+        "Upgrade-Insecure-Requests": "1",
+        "Connection": "keep-alive",
+    },
+]
+
+_WIKIPEDIA_UA = (
+    "RootSearchBot/2.0 (https://rootsearch.app; bot@rootsearch.app) aiohttp/3.9"
+)
+
+
+def _get_stealth_ua() -> str:
+    """Return a realistic User-Agent string."""
+    if _ua_pool:
+        try:
+            return _ua_pool.random
+        except Exception:
+            pass
+    return random.choice(config.user_agents)
+
+
+def _build_stealth_headers(url: str, is_wiki: bool = False) -> Dict[str, str]:
+    """Compose a randomised but coherent browser fingerprint header set."""
+    if is_wiki:
+        return {"User-Agent": _WIKIPEDIA_UA, "Accept": "*/*"}
+    hset = random.choice(_CHROME_HEADER_SETS).copy()
+    hset["User-Agent"] = _get_stealth_ua()
+    return hset
+
+
+# ─────────────────────────────────────────────
+#  MAIN SCRAPER
+# ─────────────────────────────────────────────
+
+EventCallback = Optional[Callable[[str, Dict[str, Any]], None]]
+
+
+class DeepScraper:
+    """
+    High-performance, resilient web scraper with:
+    - Circuit Breaker per domain
+    - Proxy rotation with health tracking
+    - Exponential backoff + full jitter
+    - TLS-spoof stealth headers
+    - Per-domain cookie jar sessions
+    - SSE event emission hook (on_event callback)
+    - Graceful fallback to snippet/archive on total failure
+    """
+
+    def __init__(self, on_event: EventCallback = None):
+        self._sessions: Dict[str, aiohttp.ClientSession] = {}   # per-domain
+        self._cookie_jars: Dict[str, aiohttp.CookieJar] = {}
+        self.semaphore = asyncio.Semaphore(config.max_concurrent_requests)
+        self._on_event = on_event
+        self._cb = _circuit_breaker
+        self._proxy = _proxy_rotator
+
+    # ── Event emission ────────────────────────────────────────────
+
+    def _emit(self, event_type: str, payload: Dict[str, Any]) -> None:
+        """Fire SSE event to the registered callback (non-blocking)."""
+        if self._on_event:
+            try:
+                self._on_event(event_type, payload)
             except Exception:
                 pass
-        ua = config.user_agents[self._user_agent_index]
-        self._user_agent_index = (self._user_agent_index + 1) % len(config.user_agents)
-        return ua
-    
-    async def _get_session(self) -> aiohttp.ClientSession:
-        if self.session is None or self.session.closed:
-            timeout = aiohttp.ClientTimeout(total=config.request_timeout)
+
+    # ── Session management (per-domain cookie isolation) ──────────
+
+    async def _get_session(self, domain: str) -> aiohttp.ClientSession:
+        if domain not in self._sessions or self._sessions[domain].closed:
+            jar = aiohttp.CookieJar(unsafe=True)
+            self._cookie_jars[domain] = jar
+            timeout = aiohttp.ClientTimeout(
+                total=config.request_timeout,
+                connect=10,
+                sock_read=20,
+            )
             resolver = SafeResolver()
-            conn = aiohttp.TCPConnector(limit=config.max_concurrent_requests, force_close=True, resolver=resolver)
-            self.session = aiohttp.ClientSession(timeout=timeout, connector=conn)
-        return self.session
-    
+            conn = aiohttp.TCPConnector(
+                limit=config.max_concurrent_requests,
+                force_close=False,          # keep-alive enabled
+                enable_cleanup_closed=True,
+                resolver=resolver,
+            )
+            self._sessions[domain] = aiohttp.ClientSession(
+                timeout=timeout,
+                connector=conn,
+                cookie_jar=jar,
+            )
+        return self._sessions[domain]
+
+    # ── URL safety guard ─────────────────────────────────────────
+
     @staticmethod
     def _is_safe_url(url: str) -> bool:
-        """تحقق مبدئي سريع من أمان الرابط قبل البدء بالطلب"""
         try:
             parsed = urlparse(url)
-            if parsed.scheme not in ('http', 'https'):
+            if parsed.scheme not in ("http", "https"):
                 return False
-            
-            hostname = parsed.hostname
-            if not hostname:
+            h = (parsed.hostname or "").lower()
+            if not h:
                 return False
-                
-            # تصفية سريعة للنصوص الواضحة
-            hostname_lower = hostname.lower()
-            if hostname_lower in ('localhost', '127.0.0.1', '::1') or hostname_lower.endswith('.local'):
+            if h in ("localhost", "127.0.0.1", "::1") or h.endswith(".local"):
                 return False
-                
             return True
         except Exception:
             return False
 
-    async def fetch_page(self, url: str) -> Optional[str]:
-        """جلب صفحة ويب كاملة بشكل آمن عبر aiohttp لمنع ثغرات SSRF و DNS Rebinding"""
+    # ── Core fetch with Circuit Breaker + Backoff + Proxy ────────
+
+    async def fetch_page(self, url: str,
+                         fallback_snippet: str = "") -> Optional[str]:
+        """
+        Fetch a URL with:
+        1. Circuit breaker check (domain-level)
+        2. Proxy rotation (if configured)
+        3. Exponential backoff + full jitter on failure
+        4. Graceful fallback to fallback_snippet if circuit is OPEN
+        """
         if not self._is_safe_url(url):
-            print(f"[⚠️ SSRF PROTECTION] تم حظر محاولة الوصول إلى رابط غير آمن: {url}")
+            self._emit("node_status_update", {
+                "nodeId": f"scrape_{url[:40]}",
+                "status": "failed",
+                "label": "SSRF blocked — unsafe URL",
+            })
             return None
-            
+
+        domain = urlparse(url).netloc or url
+        is_wiki = any(w in url.lower() for w in ["wikipedia.org", "wikimedia.org"])
+
+        # ── Circuit Breaker guard ──
+        if not self._cb.is_allowed(domain):
+            self._emit("node_status_update", {
+                "nodeId": f"scrape_{domain}",
+                "status": "rerouted",
+                "label": f"Circuit OPEN — using cached fallback for {domain}",
+                "metadata": {"cb_state": "open"},
+            })
+            return fallback_snippet or None
+
         async with self.semaphore:
-            session = await self._get_session()
-            
-            headers = {
-                "User-Agent": self._get_next_user_agent(),
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-                "Accept-Language": "en-US,en;q=0.9,ar;q=0.8",
-                "Accept-Encoding": "gzip, deflate, br",
-                "DNT": "1",
-                "Connection": "keep-alive",
-                "Upgrade-Insecure-Requests": "1",
-            }
-            
-            # محاولة جلب الصفحة مع إعادة المحاولة وتغيير وكيل المستخدم
-            for attempt in range(3):
+            session = await self._get_session(domain)
+
+            for attempt in range(4):  # max 4 attempts
+                proxy = self._proxy.get_proxy() if self._proxy.has_proxies else None
+                headers = _build_stealth_headers(url, is_wiki=(is_wiki or attempt > 1))
+
+                self._emit("node_status_update", {
+                    "nodeId": f"scrape_{domain}",
+                    "status": "fetching",
+                    "label": f"Attempt {attempt + 1} — {domain}",
+                    "metadata": {
+                        "proxy": bool(proxy),
+                        "stealth": True,
+                        "attempt": attempt,
+                    },
+                })
+
                 try:
-                    headers["User-Agent"] = self._get_next_user_agent()
-                    async with session.get(url, headers=headers, 
-                                           allow_redirects=True,
-                                           ssl=False) as response:
-                        if response.status == 200:
-                            content_type = response.headers.get('Content-Type', '')
-                            if any(t in content_type for t in ['text/html', 'application/xhtml', 'application/json']):
-                                return await response.text()
+                    kwargs: Dict[str, Any] = {
+                        "headers": headers,
+                        "allow_redirects": True,
+                        "ssl": False,
+                    }
+                    if proxy:
+                        kwargs["proxy"] = proxy
+
+                    async with session.get(url, **kwargs) as resp:
+                        if resp.status == 200:
+                            ct = resp.headers.get("Content-Type", "")
+                            if any(t in ct for t in ["text/html", "application/xhtml",
+                                                      "application/json", "text/plain"]):
+                                html = await resp.text(errors="replace")
+                                self._cb.record_success(domain)
+                                if proxy:
+                                    self._proxy.record_success(proxy)
+                                self._emit("node_status_update", {
+                                    "nodeId": f"scrape_{domain}",
+                                    "status": "success",
+                                    "label": f"Fetched {len(html):,} chars from {domain}",
+                                })
+                                return html
                             else:
+                                # non-text: try reading anyway
                                 try:
-                                    return await response.text()
+                                    html = await resp.text(errors="replace")
+                                    if html:
+                                        self._cb.record_success(domain)
+                                        return html
                                 except Exception:
                                     pass
-                        elif response.status == 429:
-                            wait = min(3 * (attempt + 1), 15)
-                            await asyncio.sleep(wait)
+
+                        elif resp.status == 403:
+                            self._emit("node_status_update", {
+                                "nodeId": f"scrape_{domain}",
+                                "status": "fetching",
+                                "label": "Bypassing Cloudflare — switching UA...",
+                            })
+                            # Force wiki-bot UA on next attempt
+                            is_wiki = True
+                            delay = _backoff_delay(attempt, base=2.0, cap=12.0)
+                            await asyncio.sleep(delay)
+
+                        elif resp.status == 429:
+                            self._emit("node_status_update", {
+                                "nodeId": f"scrape_{domain}",
+                                "status": "fetching",
+                                "label": "Rate-limited — backing off...",
+                            })
+                            delay = _backoff_delay(attempt, base=3.0, cap=20.0)
+                            await asyncio.sleep(delay)
+
+                        elif resp.status in (404, 410):
+                            # Permanent failure — don't retry
+                            self._cb.record_failure(domain)
+                            break
+
                         else:
-                            await asyncio.sleep(1 * (attempt + 1))
-                except Exception as e:
-                    if "Access denied" in str(e) or "blocked" in str(e):
-                        print(f"[⚠️ SSRF PROTECTION] تم حظر الطلب من خلال Resolver: {url} -> {e}")
+                            delay = _backoff_delay(attempt, base=1.5, cap=15.0)
+                            await asyncio.sleep(delay)
+
+                except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+                    if proxy:
+                        self._proxy.record_failure(proxy)
+                    err_msg = str(exc)
+                    if "Access denied" in err_msg or "blocked" in err_msg:
+                        self._emit("node_status_update", {
+                            "nodeId": f"scrape_{domain}",
+                            "status": "failed",
+                            "label": f"SSRF guard blocked: {domain}",
+                        })
                         return None
-                    if attempt == 2:
-                        return None
-                    await asyncio.sleep(1.5 * (attempt + 1))
-            
+
+                    delay = _backoff_delay(attempt, base=1.5, cap=15.0)
+                    await asyncio.sleep(delay)
+
+                except Exception:
+                    delay = _backoff_delay(attempt, base=1.0, cap=10.0)
+                    await asyncio.sleep(delay)
+
+            # All attempts exhausted — record failure
+            self._cb.record_failure(domain)
+            cb_state = self._cb.domain_status(domain)
+
+            self._emit("node_status_update", {
+                "nodeId": f"scrape_{domain}",
+                "status": "failed" if cb_state != "open" else "rerouted",
+                "label": (
+                    f"Circuit OPEN — {domain} quarantined for 45s"
+                    if cb_state == "open"
+                    else f"All attempts failed — {domain}"
+                ),
+                "metadata": {"cb_state": cb_state, "can_retry": cb_state != "open"},
+            })
+
+            # Graceful fallback
+            if fallback_snippet:
+                return fallback_snippet
             return None
-    
+
+    # ── Content extraction pipeline ───────────────────────────────
+
     def extract_content_trafilatura(self, html: str, url: str) -> Dict[str, Any]:
-        """استخراج المحتوى الأساسي باستخدام trafilatura (الأفضل)"""
+        """Primary extractor — trafilatura (highest quality)."""
         try:
-            # إعدادات trafilatura للاستخراج العميق
             result = trafilatura.extract(
                 html,
                 url=url,
@@ -173,218 +527,216 @@ class DeepScraper:
                 include_tables=True,
                 include_images=False,
                 include_links=False,
-                output_format='json',
+                output_format="json",
                 with_metadata=True,
-                max_tree_size=1000000,  # حد أقصى لحجم الشجرة
-                include_processing_instructions=False,
+                max_tree_size=1_000_000,
                 favor_precision=True,
             )
-            
             if result:
-                import json
                 data = json.loads(result)
                 return {
-                    'title': data.get('title', ''),
-                    'content': data.get('raw_text', ''),
-                    'author': data.get('author', ''),
-                    'date': data.get('date', ''),
-                    'description': data.get('description', ''),
-                    'site_name': data.get('sitename', ''),
-                    'categories': data.get('categories', []),
-                    'tags': data.get('tags', []),
+                    "title": data.get("title", ""),
+                    "content": data.get("raw_text", ""),
+                    "author": data.get("author", ""),
+                    "date": data.get("date", ""),
+                    "description": data.get("description", ""),
+                    "site_name": data.get("sitename", ""),
+                    "categories": data.get("categories", []),
+                    "tags": data.get("tags", []),
+                    "extraction_method": "trafilatura",
                 }
         except Exception:
             pass
-        
         return {}
-    
+
     def extract_content_bs4(self, html: str, url: str) -> Dict[str, Any]:
-        """استخراج المحتوى باستخدام BeautifulSoup (احتياطي)"""
+        """Fallback extractor — BeautifulSoup."""
         try:
-            soup = BeautifulSoup(html, 'html.parser')
-            
-            # إزالة العناصر غير المرغوب فيها
-            for element in soup(['script', 'style', 'nav', 'header', 'footer', 
-                                'iframe', 'noscript', 'svg', 'form', 'aside']):
-                element.decompose()
-            
-            # استخراج العنوان
-            title = ''
-            if soup.title:
-                title = soup.title.get_text(strip=True)
-            
-            # استخراج الوصف
-            description = ''
-            meta_desc = soup.find('meta', attrs={'name': 'description'}) or \
-                        soup.find('meta', attrs={'property': 'og:description'})
-            if meta_desc:
-                description = meta_desc.get('content', '')
-            
-            # استخراج النص الرئيسي
-            content_parts = []
-            
-            # محاولة العثور على المحتوى الرئيسي
-            main_selectors = [
-                'article', 'main', '[role="main"]', '.post-content', '.article-content',
-                '.entry-content', '#content', '.content', '.post', '.article',
-                '.story-body', '.story-body__inner', '.detail-body',
-                '[itemprop="articleBody"]', '.node-content',
+            soup = BeautifulSoup(html, "html.parser")
+            for el in soup(["script", "style", "nav", "header", "footer",
+                            "iframe", "noscript", "svg", "form", "aside"]):
+                el.decompose()
+
+            title = soup.title.get_text(strip=True) if soup.title else ""
+
+            description = ""
+            m = soup.find("meta", attrs={"name": "description"}) or \
+                soup.find("meta", attrs={"property": "og:description"})
+            if m:
+                description = m.get("content", "")
+
+            content_parts: List[str] = []
+            selectors = [
+                "article", "main", '[role="main"]', ".post-content",
+                ".article-content", ".entry-content", "#content", ".content",
+                ".post", ".article", ".story-body", "[itemprop='articleBody']",
             ]
-            
-            for selector in main_selectors:
+            for sel in selectors:
                 try:
-                    main_content = soup.select_one(selector)
-                    if main_content:
-                        paragraphs = main_content.find_all(['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 
-                                                          'li', 'td', 'th', 'blockquote', 'pre', 'code'])
-                        for p in paragraphs:
-                            text = p.get_text(strip=True)
-                            if text and len(text) > 20:
-                                content_parts.append(text)
-                        
+                    node = soup.select_one(sel)
+                    if node:
+                        for tag in node.find_all(
+                                ["p", "h1", "h2", "h3", "h4", "h5", "h6",
+                                 "li", "td", "th", "blockquote", "pre", "code"]):
+                            t = tag.get_text(strip=True)
+                            if t and len(t) > 20:
+                                content_parts.append(t)
                         if content_parts:
                             break
                 except Exception:
                     continue
-            
-            # إذا لم نجد محتوى، نأخذ كل الفقرات
+
             if not content_parts:
-                paragraphs = soup.find_all(['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6'])
-                for p in paragraphs:
-                    text = p.get_text(strip=True)
-                    if text and len(text) > 30:
-                        content_parts.append(text)
-            
-            content = '\n\n'.join(content_parts)
-            
-            # تنظيف النص
-            content = re.sub(r'\s+', ' ', content)
-            content = re.sub(r'\n{3,}', '\n\n', content)
-            
-            # استخراج الكلمات المفتاحية
-            keywords = []
-            meta_keywords = soup.find('meta', attrs={'name': 'keywords'})
-            if meta_keywords:
-                kw = meta_keywords.get('content', '')
-                keywords = [k.strip() for k in kw.split(',') if k.strip()]
-            
+                for p in soup.find_all(["p", "h1", "h2", "h3", "h4", "h5", "h6"]):
+                    t = p.get_text(strip=True)
+                    if t and len(t) > 30:
+                        content_parts.append(t)
+
+            content = "\n\n".join(content_parts)
+            content = re.sub(r"\s+", " ", content)
+            content = re.sub(r"\n{3,}", "\n\n", content)
+
+            keywords: List[str] = []
+            mk = soup.find("meta", attrs={"name": "keywords"})
+            if mk:
+                keywords = [k.strip() for k in mk.get("content", "").split(",") if k.strip()]
+
             return {
-                'title': title,
-                'content': content.strip()[:100000],  # حد أقصى 100k حرف
-                'description': description,
-                'keywords': keywords,
-                'extraction_method': 'bs4',
+                "title": title,
+                "content": content.strip()[:100_000],
+                "description": description,
+                "keywords": keywords,
+                "extraction_method": "bs4",
             }
-            
-        except Exception as e:
-            return {'title': '', 'content': '', 'error': str(e)}
-    
-    async def scrape_url(self, url: str) -> Optional[Dict[str, Any]]:
-        """تسليق صفحة ويب واستخراج محتواها بالكامل"""
-        html = await self.fetch_page(url)
+        except Exception as exc:
+            return {"title": "", "content": "", "error": str(exc)}
+
+    # ── Public API ─────────────────────────────────────────────────
+
+    async def scrape_url(self, url: str,
+                         fallback_snippet: str = "") -> Optional[Dict[str, Any]]:
+        """Scrape a single URL — returns extracted content dict or None."""
+        domain = urlparse(url).netloc or url
+
+        self._emit("tree_node", {
+            "nodeId": f"scrape_{domain}",
+            "stage": "extraction",
+            "status": "pending",
+            "label": domain,
+            "parentId": "source_discovery",
+        })
+
+        html = await self.fetch_page(url, fallback_snippet=fallback_snippet)
         if not html:
             return None
-        
-        # استخدام trafilatura أولاً (أفضل جودة)
+
+        self._emit("node_status_update", {
+            "nodeId": f"scrape_{domain}",
+            "status": "processing",
+            "label": "Extracting metadata...",
+        })
+
         extracted = self.extract_content_trafilatura(html, url)
-        
-        # إذا فشل، استخدم BeautifulSoup
-        if not extracted.get('content'):
+        if not extracted.get("content"):
             extracted = self.extract_content_bs4(html, url)
-        
-        if extracted.get('content'):
-            extracted['url'] = url
-            extracted['content_length'] = len(extracted['content'])
-            extracted['word_count'] = len(extracted['content'].split())
-            extracted['scrape_timestamp'] = datetime.now().isoformat()
-            
-            # استخراج عنوان الـ IP الفعلي للموقع
+
+        if extracted.get("content"):
+            extracted["url"] = url
+            extracted["content_length"] = len(extracted["content"])
+            extracted["word_count"] = len(extracted["content"].split())
+            extracted["scrape_timestamp"] = datetime.now().isoformat()
+            extracted["cb_state"] = self._cb.domain_status(domain)
+
             try:
                 hostname = urlparse(url).hostname
-                if hostname:
-                    extracted['resolved_ip'] = socket.gethostbyname(hostname)
-                else:
-                    extracted['resolved_ip'] = ''
+                extracted["resolved_ip"] = (
+                    socket.gethostbyname(hostname) if hostname else ""
+                )
             except Exception:
-                extracted['resolved_ip'] = ''
-            
+                extracted["resolved_ip"] = ""
+
+            self._emit("node_status_update", {
+                "nodeId": f"scrape_{domain}",
+                "status": "success",
+                "label": f"Extracted {extracted['word_count']:,} words",
+                "metadata": {
+                    "method": extracted.get("extraction_method", ""),
+                    "words": extracted["word_count"],
+                    "cb_state": extracted["cb_state"],
+                },
+            })
             return extracted
-        
+
         return None
-    
-    async def scrape_batch(self, results: List[SearchResult], max_pages: int = 20) -> List[SearchResult]:
-        """تسليق مجموعة من النتائج بشكل متوازي"""
-        enriched_results = []
-        
-        # اختيار أفضل النتائج للتسليق
+
+    async def scrape_batch(self, results: List[SearchResult],
+                           max_pages: int = 20) -> List[SearchResult]:
+        """Scrape a ranked list of results in parallel."""
         sorted_results = sorted(results, key=lambda r: r.relevance_score, reverse=True)
         to_scrape = sorted_results[:max_pages]
-        
-        # تسليق بشكل متوازي
-        tasks = []
-        for result in to_scrape:
-            tasks.append(self.scrape_url(result.url))
-        
-        scraped_contents = await asyncio.gather(*tasks, return_exceptions=True)
-        
-        for result, content in zip(to_scrape, scraped_contents):
-            if isinstance(content, dict) and content.get('content'):
-                result.content = content['content']
-                result.metadata['scraped'] = True
-                result.metadata['word_count'] = content.get('word_count', 0)
-                result.metadata['extraction_method'] = content.get('extraction_method', 'trafilatura')
-                enriched_results.append(result)
-            else:
-                # حتى لو فشل التسليق، نضيف النتيجة مع السنبت
-                enriched_results.append(result)
-        
-        return enriched_results
-    
+
+        tasks = [
+            self.scrape_url(r.url, fallback_snippet=r.snippet)
+            for r in to_scrape
+        ]
+        scraped = await asyncio.gather(*tasks, return_exceptions=True)
+
+        enriched = []
+        for result, content in zip(to_scrape, scraped):
+            if isinstance(content, dict) and content.get("content"):
+                result.content = content["content"]
+                result.metadata["scraped"] = True
+                result.metadata["word_count"] = content.get("word_count", 0)
+                result.metadata["extraction_method"] = content.get(
+                    "extraction_method", "trafilatura")
+                result.metadata["cb_state"] = content.get("cb_state", "closed")
+            enriched.append(result)
+
+        return enriched
+
     async def deep_scrape(self, url: str, max_depth: int = 2) -> Dict[str, Any]:
-        """تسليق عميق - يتابع الروابط الداخلية"""
-        result = {
-            'main_page': None,
-            'related_pages': [],
-            'all_content': '',
+        """Recursively scrape a URL and its internal links (bounded depth)."""
+        result: Dict[str, Any] = {
+            "main_page": None,
+            "related_pages": [],
+            "all_content": "",
         }
-        
+
         main_content = await self.scrape_url(url)
         if not main_content:
             return result
-        
-        result['main_page'] = main_content
-        result['all_content'] = main_content.get('content', '')
-        
-        # البحث عن روابط داخلية ذات صلة
+
+        result["main_page"] = main_content
+        result["all_content"] = main_content.get("content", "")
+
         if max_depth > 1:
             html = await self.fetch_page(url)
             if html:
-                soup = BeautifulSoup(html, 'html.parser')
+                soup = BeautifulSoup(html, "html.parser")
                 base_domain = urlparse(url).netloc
-                
-                internal_links = []
-                for a_tag in soup.find_all('a', href=True):
-                    href = a_tag['href']
-                    full_url = urljoin(url, href)
-                    parsed = urlparse(full_url)
-                    
-                    # نجمع الروابط الداخلية فقط
-                    if parsed.netloc == base_domain and parsed.scheme in ('http', 'https'):
-                        # نتجنب الصور والملفات
-                        if not any(ext in parsed.path.lower() for ext in ['.jpg', '.png', '.pdf', '.zip', '.mp4']):
-                            internal_links.append(full_url)
-                
-                # نأخذ أقصى 5 روابط داخلية
-                internal_links = list(set(internal_links))[:5]
-                
-                for link in internal_links:
-                    content = await self.scrape_url(link)
-                    if content:
-                        result['related_pages'].append(content)
-                        result['all_content'] += '\n\n' + content.get('content', '')
-        
+                internal_links: List[str] = []
+
+                for a in soup.find_all("a", href=True):
+                    full = urljoin(url, a["href"])
+                    p = urlparse(full)
+                    if (p.netloc == base_domain
+                            and p.scheme in ("http", "https")
+                            and not any(ext in p.path.lower()
+                                        for ext in [".jpg", ".png", ".pdf",
+                                                    ".zip", ".mp4", ".gif"])):
+                        internal_links.append(full)
+
+                for link in list(set(internal_links))[:5]:
+                    c = await self.scrape_url(link)
+                    if c:
+                        result["related_pages"].append(c)
+                        result["all_content"] += "\n\n" + c.get("content", "")
+
         return result
-    
-    async def close(self):
-        if self.session and not self.session.closed:
-            await self.session.close()
+
+    async def close(self) -> None:
+        """Close all open sessions."""
+        for session in self._sessions.values():
+            if not session.closed:
+                await session.close()
+        self._sessions.clear()

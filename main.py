@@ -32,11 +32,11 @@ from core.aggregator import ResultAggregator
 
 
 class FuckenSearch:
-    """المحرك الرئيسي - ينسق جميع المكونات"""
-    
-    def __init__(self):
-        self.search_engine = SearchEngine()
-        self.scraper = DeepScraper()
+    """المحرك الرئيسي — ينسق جميع المكونات مع دعم on_event للشجرة الحية"""
+
+    def __init__(self, on_event=None):
+        self.search_engine = SearchEngine(on_event=on_event)
+        self.scraper = DeepScraper(on_event=on_event)
         self.aggregator = ResultAggregator()
     
     async def deep_search(self, query: str, deep_analysis: bool = True) -> dict:
