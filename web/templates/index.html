@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fucken Search - محرك البحث الخارق</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🔍</text></svg>">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@300;400;600;700;900&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <link rel="stylesheet" href="/static/style.css">
+    <!-- Vis.js CDN for Interactive Network Graph -->
+    <script type="text/javascript" src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+    <!-- Marked.js for AI Summary Markdown Rendering -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <!-- DOMPurify for XSS Prevention -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.0.6/purify.min.js"></script>
+</head>
+<body>
+    <a href="#searchInput" class="skip-link">تخطي إلى البحث</a>
+    <div id="toastContainer" class="toast-container" aria-live="polite" aria-atomic="true"></div>
+    <div class="stars"></div>
+    <div class="particles" id="particles"></div>
+    
+    <div class="container">
+        <div class="logo-section">
+            <div class="logo-glitch">
+                <h1 class="glitch-text" data-text="FUCKEN SEARCH">FUCKEN SEARCH</h1>
+                <div class="logo-subtitle">⚡ DEEP SEARCH ENGINE ⚡</div>
+            </div>
+            <p class="tagline">
+                <span class="typing-text"></span>
+            </p>
+        </div>
+
+        <div class="search-section" id="searchSection">
+            <form id="searchForm" class="search-box" onsubmit="return handleSearch(event)" role="search" aria-label="نموذج البحث">
+                <div class="search-input-wrapper">
+                    <i class="fas fa-search search-icon"></i>
+                    <input 
+                        type="text" 
+                        id="searchInput" 
+                        class="search-input"
+                        placeholder="ابحث في أعماق الإنترنت... اكتشف كل شيء..."
+                        autocomplete="off"
+                        autofocus
+                        aria-label="استعلام البحث"
+                        enterkeyhint="search"
+                    />
+                    <button type="button" class="clear-btn" id="clearBtn" onclick="clearSearch()" aria-label="مسح البحث">
+                        <i class="fas fa-times"></i>
+                    </button>
+                    <button type="submit" class="search-submit-btn" id="searchSubmitBtn" aria-label="تنفيذ البحث">
+                        <i class="fas fa-arrow-left" aria-hidden="true"></i> ابحث
+                    </button>
+                </div>
+                <div class="search-options">
+                    <label class="option-label">
+                        <input type="checkbox" id="deepSearch" checked />
+                        <span class="option-toggle">
+                            <i class="fas fa-brain"></i> بحث عميق
+                        </span>
+                    </label>
+                    <button type="button" class="new-search-btn" id="newSearchBtn" onclick="resetSearch()" style="display: none;">
+                        <i class="fas fa-redo-alt"></i> بحث جديد
+                    </button>
+                    <div class="search-stats" id="searchStats">
+                        <span><i class="fas fa-database" aria-hidden="true"></i> <span id="engineCount">5</span> محركات</span>
+                        <span><i class="fas fa-microchip" aria-hidden="true"></i> <span id="aiStatus">AI</span></span>
+                        <span class="kbd-hint" title="اختصار التركيز على البحث"><kbd>Ctrl</kbd>+<kbd>K</kbd></span>
+                    </div>
+                </div>
+            </form>
+
+            <div class="search-tips">
+                <div class="tip-item"><i class="fas fa-lightbulb"></i> جرب أسئلة معقدة</div>
+                <div class="tip-item"><i class="fas fa-globe"></i> البحث في جميع المصادر</div>
+                <div class="tip-item"><i class="fas fa-robot"></i> تحليل ذكي للنتائج</div>
+            </div>
+        </div>
+
+        <div id="resultsSection" class="results-section" style="display: none;">
+            <div class="results-header">
+                <div class="results-info">
+                    <span id="resultsCount">0</span> نتيجة في <span id="searchTime">0.0</span> ثانية
+                </div>
+                <div class="results-actions">
+                    <button class="action-btn save-network-btn" onclick="exportAsHTMLReport()" title="حفظ شبكة المصادر التفاعلية (HTML) لفتحها لاحقاً">
+                        <i class="fas fa-network-wired"></i> حفظ الشبكة التفاعلية
+                    </button>
+                    <button class="action-btn" onclick="exportAsJSON()" title="تصدير JSON">
+                        <i class="fas fa-file-code"></i>
+                    </button>
+                    <button class="action-btn" onclick="exportAsText()" title="تصدير نص">
+                        <i class="fas fa-file-alt"></i>
+                    </button>
+                </div>
+            </div>
+
+            <!-- تبويبات عصرية لعرض النتائج بمستويات مختلفة -->
+            <div class="results-tabs" role="tablist" aria-label="عرض النتائج">
+                <button class="tab-btn active" id="tab_tree" role="tab" aria-selected="true" aria-controls="searchTreeContainer" onclick="switchTab('tree')">
+                    <i class="fas fa-stream" aria-hidden="true"></i> مسار جلب المصادر حياً
+                </button>
+                <button class="tab-btn" id="tab_graph" role="tab" aria-selected="false" aria-controls="knowledgeGraphContainer" onclick="switchTab('graph')">
+                    <i class="fas fa-project-diagram" aria-hidden="true"></i> الشبكة المصدرية
+                </button>
+                <button class="tab-btn" id="tab_analysis" role="tab" aria-selected="false" aria-controls="analysisPanel" onclick="switchTab('analysis')">
+                    <i class="fas fa-brain" aria-hidden="true"></i> التلخيص والتحليلات
+                </button>
+                <button class="tab-btn" id="tab_results" role="tab" aria-selected="false" aria-controls="resultsListWrapper" onclick="switchTab('results')">
+                    <i class="fas fa-list-ul" aria-hidden="true"></i> قائمة النتائج
+                </button>
+            </div>
+
+            <!-- شجرة البحث التفاعلية الحية -->
+            <div id="searchTreeContainer" class="search-tree-container tab-content" role="tabpanel" aria-labelledby="tab_tree">
+                <div class="tree-header">
+                    <h3><i class="fas fa-network-wired"></i> مسار جلب وتحليل مصادر البيانات (شجرة البحث الحية)</h3>
+                    <p class="tree-status" id="treeStatus">في انتظار بدء الاستعلام...</p>
+                </div>
+                <div class="tree-wrapper">
+                    <div id="searchTree" class="search-tree-modern">
+                        <!-- سيتم رسم الشجرة هنا ديناميكياً بهيكل CSS Grid/Flex متفرع احترافي -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- شبكة المصادر التفاعلية الخارقة -->
+            <div id="knowledgeGraphContainer" class="graph-section-wrapper tab-content is-hidden" role="tabpanel" aria-labelledby="tab_graph">
+                <div class="graph-header-controls">
+                    <div class="graph-title-desc">
+                        <h3><i class="fas fa-project-diagram"></i> شبكة العلاقات المعرفية والمصادر</h3>
+                        <p>خريطة ذهنية تفاعلية بالفيزياء تربط بين موضوع البحث، والمواقع، والكلمات المفتاحية المستخرجة بالذكاء الاصطناعي</p>
+                    </div>
+                    <div class="graph-control-buttons">
+                        <button class="graph-ctrl-btn" onclick="toggleGraphPhysics()" id="physicsBtn" title="تجميد/تشغيل محاكاة الفيزياء">
+                            <i class="fas fa-pause"></i> تجميد الشبكة
+                        </button>
+                        <button class="graph-ctrl-btn" onclick="resetGraphView()" title="توسيط وعرض كل العقد">
+                            <i class="fas fa-expand"></i> توسيط
+                        </button>
+                    </div>
+                </div>
+                <div class="graph-layout-grid">
+                    <div class="graph-canvas-container">
+                        <div id="knowledgeGraphCanvas"></div>
+                    </div>
+                    <div class="graph-sidebar" id="graphSidebar">
+                        <div class="sidebar-default-msg">
+                            <i class="fas fa-mouse-pointer"></i>
+                            <h4>استكشف الشبكة المصدرية</h4>
+                            <p>انقر على أي عقدة (الموقع، الكلمة المفتاحية، أو الاستعلام) لعرض التحليل التفصيلي والروابط المعرفية هنا</p>
+                        </div>
+                        <div class="sidebar-details-content" style="display: none;">
+                            <!-- سيتم تعبئته ديناميكياً عن طريق JS -->
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- لوحة التلخيص والتحليلات -->
+            <div class="analysis-panel tab-content is-hidden" id="analysisPanel" role="tabpanel" aria-labelledby="tab_analysis">
+                <div class="analysis-grid">
+                    <div class="analysis-card" id="summaryCard">
+                        <div class="card-header">
+                            <i class="fas fa-file-alt"></i>
+                            <h3>التلخيص الشامل</h3>
+                        </div>
+                        <div class="card-body" id="summaryContent">
+                            <div class="loading-dots"><span></span><span></span><span></span></div>
+                        </div>
+                    </div>
+                    
+                    <div class="analysis-card" id="keywordsCard">
+                        <div class="card-header">
+                            <i class="fas fa-tags"></i>
+                            <h3>الكلمات المفتاحية الأكثر صلة</h3>
+                        </div>
+                        <div class="card-body" id="keywordsContent"></div>
+                    </div>
+                    
+                    <div class="analysis-card" id="fuckenbaseCard">
+                        <div class="card-header">
+                            <i class="fas fa-radiation"></i>
+                            <h3>FUCKENBASE - التحليلات الفائقة والسرية</h3>
+                        </div>
+                        <div class="card-body" id="fuckenbaseContent">
+                            <div class="loading-dots"><span></span><span></span><span></span></div>
+                        </div>
+                    </div>
+                    
+                    <div class="analysis-card" id="statsCard">
+                        <div class="card-header">
+                            <i class="fas fa-chart-bar"></i>
+                            <h3>الإحصائيات والتحليلات</h3>
+                        </div>
+                        <div class="card-body" id="statsContent"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- قائمة النتائج بالتفصيل -->
+            <div id="resultsListWrapper" class="tab-content is-hidden" role="tabpanel" aria-labelledby="tab_results">
+                <div class="categories-nav" id="categoriesNav"></div>
+
+                <div class="results-list" id="resultsList">
+                    <div class="loading-state" id="loadingState">
+                        <div class="loader">
+                            <div class="loader-circle"></div>
+                            <div class="loader-circle"></div>
+                            <div class="loader-circle"></div>
+                        </div>
+                        <p>جاري البحث في أعماق الإنترنت...</p>
+                        <div class="search-progress">
+                            <div class="progress-item"><i class="fas fa-search"></i> البحث في المحركات...</div>
+                            <div class="progress-item"><i class="fas fa-spider"></i> تسليق المواقع...</div>
+                            <div class="progress-item"><i class="fas fa-brain"></i> تحليل النتائج...</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="pagination" id="pagination"></div>
+            </div>
+        </div>
+
+        <div id="trendingSection" class="trending-section">
+            <h3><i class="fas fa-fire"></i> جرب البحث عن:</h3>
+            <div class="trending-tags">
+                <span class="trending-tag" onclick="searchQuery(this.textContent)">أحدث التقنيات 2026</span>
+                <span class="trending-tag" onclick="searchQuery(this.textContent)">الذكاء الاصطناعي</span>
+                <span class="trending-tag" onclick="searchQuery(this.textContent)">تعلم الآلة</span>
+                <span class="trending-tag" onclick="searchQuery(this.textContent)">تطوير الويب</span>
+                <span class="trending-tag" onclick="searchQuery(this.textContent)">علوم البيانات</span>
+                <span class="trending-tag" onclick="searchQuery(this.textContent)">الأمن السيبراني</span>
+                <span class="trending-tag" onclick="searchQuery(this.textContent)">الحوسبة الكمومية</span>
+                <span class="trending-tag" onclick="searchQuery(this.textContent)">Deep Learning</span>
+            </div>
+        </div>
+    </div>
+
+    <footer class="footer">
+        <p>DeepSearch Engine v1.0 - البحث الذكي المتطور في أعماق الإنترنت</p>
+        <p class="footer-desc">تحليل بالذكاء الاصطناعي وميكنة كاملة لمسار البحث واستخراج الكيانات</p>
+    </footer>
+
+    <!-- نافذة تفاصيل المفهوم المعرفي الخارقة (Keyword Details Modal) -->
+    <div id="keywordModal" class="fucken-modal" style="display: none;">
+        <div class="fucken-modal-content">
+            <div class="fucken-modal-header">
+                <h3 id="modalKeywordTitle"><i class="fas fa-tag"></i> تفاصيل المفهوم: <span id="modalKeywordName" style="color: #ffffff; text-shadow: 0 0 10px rgba(255,255,255,0.3);"></span></h3>
+                <span class="fucken-modal-close" onclick="closeKeywordModal()">&times;</span>
+            </div>
+            <div class="fucken-modal-body">
+                <div class="modal-stats-grid">
+                    <div class="m-stat-card">
+                        <span class="m-stat-label">التكرار الإجمالي</span>
+                        <span class="m-stat-value" id="modalKeywordFreq">0</span>
+                    </div>
+                    <div class="m-stat-card">
+                        <span class="m-stat-label">المواقع التي ذكرته</span>
+                        <span class="m-stat-value" id="modalKeywordSites">0</span>
+                    </div>
+                    <div class="m-stat-card">
+                        <span class="m-stat-label">معدل الكثافة العام</span>
+                        <span class="m-stat-value" id="modalKeywordDensity">0%</span>
+                    </div>
+                </div>
+
+                <!-- التعريف والتوضيح السياقي الذكي للمفهوم -->
+                <div class="modal-section" id="keywordExplanationSection" style="margin-top: 15px;">
+                    <h4><i class="fas fa-brain"></i> التعريف والتوضيح السياقي الذكي</h4>
+                    <div id="modalKeywordExplanation" class="modal-explanation-box">
+                        <div class="loading-dots" style="padding: 5px 0;"><span></span><span></span><span></span></div>
+                    </div>
+                </div>
+                
+                <div class="modal-section">
+                    <h4><i class="fas fa-chart-pie"></i> توزيع التكرار عبر المواقع والمصادر</h4>
+                    <div id="modalKeywordDistribution" class="modal-dist-list">
+                        <!-- سيتم تعبئتها ديناميكياً -->
+                    </div>
+                </div>
+                
+                <div class="modal-section">
+                    <h4><i class="fas fa-quote-right"></i> السياقات النصية المكتشفة</h4>
+                    <div id="modalKeywordContexts" class="modal-contexts-list">
+                        <!-- سيتم تعبئتها ديناميكياً -->
+                    </div>
+                </div>
+            </div>
+            <div class="fucken-modal-footer">
+                <button class="modal-btn btn-secondary" onclick="closeKeywordModal()">إغلاق</button>
+                <button class="modal-btn btn-primary" id="modalScrollBtn"><i class="fas fa-chevron-down"></i> الانتقال لأول نتيجة</button>
+                <button class="modal-btn btn-success" id="modalFilterBtn"><i class="fas fa-filter"></i> تصفية النتائج بهذا المفهوم</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/script.js"></script>
+</body>
+</html>
