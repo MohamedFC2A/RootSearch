@@ -341,6 +341,18 @@ function closeNodeSheet() {
     if (backdrop) backdrop.style.display = 'none';
 }
 
+function openBottomContentSheet(html) {
+    const sheet = document.getElementById('nodeSheet');
+    const content = document.getElementById('sheetContent');
+    if (!sheet || !content) return;
+    content.innerHTML = html;
+    sheet.classList.add('open');
+    sheet.setAttribute('aria-hidden', 'false');
+    const backdrop = document.getElementById('sheetBackdrop');
+    if (backdrop) backdrop.style.display = 'block';
+}
+
+
 // ─── SSE STREAM CONSUMER ──────────────────────────────────────
 function startSSEStream(query, model) {
     const url = `/api/search/stream?q=${encodeURIComponent(query)}&model=${model}`;
@@ -847,56 +859,61 @@ function buildKnowledgeGraph(report) {
 
     visNetworkInstance = new vis.Network(container, graphData, opts);
 
-    // Clicking a node updates details sidebar
+    // Clicking a node updates details sidebar (or bottom sheet on mobile)
     visNetworkInstance.on('click', params => {
         if (!params.nodes.length) return;
         const id = params.nodes[0];
         const sidebar = document.getElementById('graphSidebar');
         const empty = sidebar?.querySelector('.sidebar-empty');
         const details = sidebar?.querySelector('.sidebar-details');
-        if (empty) empty.style.display = 'none';
-        if (details) {
-            details.style.display = '';
-            const r = results.find(res => getUrlId(res.url) === id);
-            if (r) {
-                const scrapedText = r.metadata?.scraped ? '<span class="status-badge success">تم سحب المحتوى</span>' : '<span class="status-badge failed">لم يسحب المحتوى</span>';
-                details.innerHTML = `
-                    <h4 style="font-size:14px;margin-bottom:8px">${escapeHtml(r.title || '')}</h4>
-                    <a href="${escapeHtml(r.url)}" target="_blank" style="font-size:11px;color:var(--accent);word-break:break-all">${escapeHtml(r.url)}</a>
-                    <div style="margin-top:8px">${scrapedText}</div>
-                    <p style="margin-top:10px;font-size:12px;color:var(--text-secondary)">${escapeHtml((r.snippet || '').slice(0, 200))}</p>
+        
+        let detailsHTML = '';
+        const r = results.find(res => getUrlId(res.url) === id);
+        if (r) {
+            const scrapedText = r.metadata?.scraped ? '<span class="status-badge success">تم سحب المحتوى</span>' : '<span class="status-badge failed">لم يسحب المحتوى</span>';
+            detailsHTML = `
+                <h4 style="font-size:14px;margin-bottom:8px">${escapeHtml(r.title || '')}</h4>
+                <a href="${escapeHtml(r.url)}" target="_blank" style="font-size:11px;color:var(--accent);word-break:break-all">${escapeHtml(r.url)}</a>
+                <div style="margin-top:8px">${scrapedText}</div>
+                <p style="margin-top:10px;font-size:12px;color:var(--text-secondary)">${escapeHtml((r.snippet || '').slice(0, 200))}</p>
+            `;
+        } else {
+            const kwIndex = id.startsWith('kw') ? parseInt(id.slice(2)) : -1;
+            const kwName = kwIndex >= 0 && kws[kwIndex] ? (typeof kws[kwIndex] === 'string' ? kws[kwIndex] : kws[kwIndex].word) : '';
+            if (kwName) {
+                detailsHTML = `
+                    <h4 style="font-size:14px;margin-bottom:8px"><i class="fas fa-tag"></i> ${escapeHtml(kwName)}</h4>
+                    <p style="font-size:12px;color:var(--text-secondary)">كلمة مفتاحية تم استخراجها وتحليلها سياقياً.</p>
+                    <button class="ghost-btn" style="margin-top:10px;width:100%" onclick="openKeywordModal('${escapeHtml(kwName)}')">عرض التفاصيل</button>
                 `;
-            } else {
-                const kwIndex = id.startsWith('kw') ? parseInt(id.slice(2)) : -1;
-                const kwName = kwIndex >= 0 && kws[kwIndex] ? (typeof kws[kwIndex] === 'string' ? kws[kwIndex] : kws[kwIndex].word) : '';
-                if (kwName) {
-                    details.innerHTML = `
-                        <h4 style="font-size:14px;margin-bottom:8px"><i class="fas fa-tag"></i> ${escapeHtml(kwName)}</h4>
-                        <p style="font-size:12px;color:var(--text-secondary)">كلمة مفتاحية تم استخراجها وتحليلها سياقياً.</p>
-                        <button class="ghost-btn" style="margin-top:10px;width:100%" onclick="openKeywordModal('${escapeHtml(kwName)}')">عرض التفاصيل</button>
-                    `;
-                } else if (id === 'query') {
-                    details.innerHTML = `
-                        <h4 style="font-size:14px;margin-bottom:8px"><i class="fas fa-search"></i> استعلام البحث</h4>
-                        <p style="font-size:12px;color:var(--text-secondary)">"${escapeHtml(report.query || '')}"</p>
-                    `;
-                } else if (id.startsWith('sub_')) {
-                    const subIndex = parseInt(id.split('_')[1]);
-                    const subText = results.find(res => res.metadata?.subquery_idx === subIndex)?.metadata?.subquery || '';
-                    details.innerHTML = `
-                        <h4 style="font-size:14px;margin-bottom:8px"><i class="fas fa-code-branch"></i> تفريعة استعلام فرعي</h4>
-                        <p style="font-size:12px;color:var(--text-secondary)">"${escapeHtml(subText)}"</p>
-                    `;
-                } else if (id.startsWith('eng_')) {
-                    const engineName = id.split('_')[2];
-                    details.innerHTML = `
-                        <h4 style="font-size:14px;margin-bottom:8px"><i class="fas fa-search"></i> محرك البحث</h4>
-                        <p style="font-size:12px;color:var(--text-secondary)">محرك ${escapeHtml(engineName.toUpperCase())} المستخدم لاكتشاف المصادر.</p>
-                    `;
-                } else {
-                    if (empty) empty.style.display = '';
-                    details.style.display = 'none';
-                }
+            } else if (id === 'query') {
+                detailsHTML = `
+                    <h4 style="font-size:14px;margin-bottom:8px"><i class="fas fa-search"></i> استعلام البحث</h4>
+                    <p style="font-size:12px;color:var(--text-secondary)">"${escapeHtml(report.query || '')}"</p>
+                `;
+            } else if (id.startsWith('sub_')) {
+                const subIndex = parseInt(id.split('_')[1]);
+                const subText = results.find(res => res.metadata?.subquery_idx === subIndex)?.metadata?.subquery || '';
+                detailsHTML = `
+                    <h4 style="font-size:14px;margin-bottom:8px"><i class="fas fa-code-branch"></i> تفريعة استعلام فرعي</h4>
+                    <p style="font-size:12px;color:var(--text-secondary)">"${escapeHtml(subText)}"</p>
+                `;
+            } else if (id.startsWith('eng_')) {
+                const engineName = id.split('_')[2];
+                detailsHTML = `
+                    <h4 style="font-size:14px;margin-bottom:8px"><i class="fas fa-search"></i> محرك البحث</h4>
+                    <p style="font-size:12px;color:var(--text-secondary)">محرك ${escapeHtml(engineName.toUpperCase())} المستخدم لاكتشاف المصادر.</p>
+                `;
+            }
+        }
+
+        if (window.innerWidth <= 768 && detailsHTML) {
+            openBottomContentSheet(detailsHTML);
+        } else {
+            if (empty) empty.style.display = detailsHTML ? 'none' : '';
+            if (details) {
+                details.style.display = detailsHTML ? '' : 'none';
+                details.innerHTML = detailsHTML || '';
             }
         }
     });

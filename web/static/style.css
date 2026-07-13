@@ -1171,20 +1171,46 @@ kbd {
   .hero-title { font-size: 26px; }
 
   .graph-layout { grid-template-columns: 1fr; }
-  .graph-sidebar { max-height: 300px; }
+  .graph-sidebar { max-height: 250px; }
 
+  .tree-canvas-wrap {
+    scroll-snap-type: x mandatory;
+    -webkit-overflow-scrolling: touch;
+  }
   .tree-canvas { padding: var(--sp-4); }
-  .tree-col { min-width: 175px; }
+  .tree-col {
+    min-width: 190px;
+    scroll-snap-align: start;
+  }
 
   .analysis-grid { grid-template-columns: 1fr; }
 
   .modal-box { border-radius: var(--r-xl) var(--r-xl) 0 0; margin-top: auto; }
   .modal-overlay { align-items: flex-end; padding: 0; }
 
-  .tab-btn span { display: none; }
-  .tab-btn { min-width: 48px; }
+  .tab-btn span { display: inline-block; font-size: var(--text-xs); }
+  .tab-btn { min-width: auto; padding: var(--sp-2) var(--sp-3); }
 
-  .results-tabs { gap: 1px; }
+  .results-tabs {
+    gap: var(--sp-1);
+    padding: var(--sp-1);
+    overflow-x: auto;
+    white-space: nowrap;
+    display: flex;
+    -webkit-overflow-scrolling: touch;
+  }
+}
+
+@media (max-width: 600px) {
+  .search-form-premium {
+    padding: var(--sp-3);
+  }
+  .search-submit-btn-embedded span {
+    display: none; /* Hide the word 'ابحث' to save horizontal space */
+  }
+  .search-submit-btn-embedded {
+    padding: 0 var(--sp-4);
+  }
 }
 
 @media (max-width: 480px) {
@@ -1195,6 +1221,7 @@ kbd {
   .search-meta { flex-wrap: wrap; gap: var(--sp-2); }
   .toast-container { left: var(--sp-4); right: var(--sp-4); width: auto; }
 }
+
 
 /* ─── VIS.JS GRAPH THEME ─────────────────────────────────────── */
 .vis-network canvas { background: var(--bg-surface) !important; }
