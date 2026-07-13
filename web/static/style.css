@@ -1580,7 +1580,14 @@ kbd {
   }
   .search-input-capsule {
     flex-direction: row;
+    align-items: stretch;
+  }
+  .search-submit-btn-embedded {
+    padding: 0 var(--sp-5) !important;
+    min-width: 56px;
+    display: flex;
     align-items: center;
+    justify-content: center;
   }
 }
 
