@@ -1173,15 +1173,57 @@ kbd {
   .graph-layout { grid-template-columns: 1fr; }
   .graph-sidebar { max-height: 250px; }
 
+  /* ─── STACK LIVE SEARCH TREE VERTICALLY ON MOBILE ─── */
   .tree-canvas-wrap {
-    scroll-snap-type: x mandatory;
-    -webkit-overflow-scrolling: touch;
+    overflow-x: hidden !important;
+    overflow-y: visible !important;
   }
-  .tree-canvas { padding: var(--sp-4); }
+  .tree-canvas {
+    flex-direction: column;
+    min-width: 100% !important;
+    gap: 0;
+    padding: var(--sp-4) 0;
+  }
   .tree-col {
-    min-width: 190px;
-    scroll-snap-align: start;
+    min-width: 100% !important;
+    max-width: 100% !important;
+    background: rgba(10, 13, 22, 0.25);
+    border: 1px solid rgba(255, 255, 255, 0.02);
+    border-radius: var(--r-md);
+    padding: var(--sp-4);
+    box-sizing: border-box;
   }
+  .tree-col-connector {
+    width: 100% !important;
+    height: 32px;
+    padding: 0 !important;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .connector-line {
+    width: 2px !important;
+    height: 100% !important;
+    border-top: none !important;
+    border-left: 1.5px dashed rgba(74, 108, 247, 0.4) !important;
+    margin: 0 auto;
+  }
+  .connector-line::after {
+    left: 50% !important;
+    top: 50% !important;
+    transform: translate(-50%, -50%) rotate(45deg) !important;
+  }
+
+  .stage-header-strip {
+    display: none !important; /* Hide horizontal columns header */
+  }
+
+  /* Stack Stage Labels inside columns on mobile */
+  #col_trigger::before { content: "1. الاستعلام الرئيسي والفرعي"; display: block; font-size: 12px; font-weight: 700; color: var(--accent); margin-bottom: var(--sp-3); border-bottom: 1px solid rgba(255,255,255,0.03); padding-bottom: 6px; }
+  #col_source_discovery::before { content: "2. اكتشاف محركات البحث والمصادر"; display: block; font-size: 12px; font-weight: 700; color: #8b5cf6; margin-bottom: var(--sp-3); border-bottom: 1px solid rgba(255,255,255,0.03); padding-bottom: 6px; }
+  #col_extraction::before { content: "3. استخراج البيانات والزحف"; display: block; font-size: 12px; font-weight: 700; color: #10b981; margin-bottom: var(--sp-3); border-bottom: 1px solid rgba(255,255,255,0.03); padding-bottom: 6px; }
+  #col_semantic_analysis::before { content: "4. التحليل الدلالي والتصنيف"; display: block; font-size: 12px; font-weight: 700; color: #f59e0b; margin-bottom: var(--sp-3); border-bottom: 1px solid rgba(255,255,255,0.03); padding-bottom: 6px; }
+  #col_verification::before { content: "5. التحقق وإصدار التقرير"; display: block; font-size: 12px; font-weight: 700; color: #ef4444; margin-bottom: var(--sp-3); border-bottom: 1px solid rgba(255,255,255,0.03); padding-bottom: 6px; }
 
   .analysis-grid { grid-template-columns: 1fr; }
 

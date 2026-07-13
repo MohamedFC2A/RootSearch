@@ -97,13 +97,15 @@ function switchTab(tabId) {
     if (btn) { btn.classList.add('active'); btn.setAttribute('aria-selected', 'true'); }
     if (tabId === 'graph') {
         if (currentSearchData) {
+            // Build graph now that container is visible (has clientWidth/clientHeight)
             buildKnowledgeGraph(currentSearchData);
-        }
-        if (visNetworkInstance) {
             setTimeout(() => {
-                visNetworkInstance.redraw();
-                visNetworkInstance.fit();
-            }, 150);
+                if (visNetworkInstance) {
+                    visNetworkInstance.setSize('100%', '100%');
+                    visNetworkInstance.redraw();
+                    visNetworkInstance.fit();
+                }
+            }, 100);
         }
     }
 }
@@ -180,13 +182,14 @@ const STAGE_ICONS = {
 };
 
 const STAGE_LABELS = {
-    pending:    'PENDING',
-    fetching:   'FETCHING',
-    processing: 'PROCESSING',
-    success:    'SUCCESS',
-    failed:     'FAILED',
-    rerouted:   'REROUTED',
+    pending:    'قيد الانتظار',
+    fetching:   'جاري الجلب',
+    processing: 'جاري المعالجة',
+    success:    'اكتمل بنجاح',
+    failed:     'فشلت العملية',
+    rerouted:   'تم تغيير المسار',
 };
+
 
 function resetLiveTree() {
     treeNodes.clear();
@@ -231,13 +234,14 @@ function createTreeNode(nodeId, stage, status, label, metadata, parentId) {
     node.dataset.status = status;
     node.dataset.stage = stage;
 
+    const initialMicro = status === 'pending' ? 'جاري التجهيز للعملية...' : '—';
     node.innerHTML = `
         <div class="node-status-row">
             <span class="node-status-dot"></span>
             <span class="node-status-tag">${STAGE_LABELS[status] || status}</span>
         </div>
         <div class="node-label">${escapeHtml(label)}</div>
-        <div class="node-microcopy" id="micro_${nodeId}">—</div>
+        <div class="node-microcopy" id="micro_${nodeId}">${initialMicro}</div>
     `;
 
     // Click opens bottom sheet
@@ -263,15 +267,22 @@ function updateTreeNode(nodeId, status, label, metadata, parentId) {
     if (labelEl) labelEl.textContent = label;
 
     const micro = node.querySelector('.node-microcopy');
-    if (micro && metadata) {
-        const parts = [];
-        if (metadata.words)   parts.push(`${metadata.words.toLocaleString()} words`);
-        if (metadata.count !== undefined) parts.push(`${metadata.count} results`);
-        if (metadata.method)  parts.push(metadata.method);
-        if (metadata.cb_state && metadata.cb_state !== 'closed') parts.push(`CB: ${metadata.cb_state}`);
-        micro.textContent = parts.join(' · ') || '—';
-    } else if (micro) {
-        micro.textContent = label.length > 40 ? label.slice(0, 40) + '…' : label;
+    if (micro) {
+        if (status === 'failed') {
+            const err = metadata?.error || metadata?.reason || 'فشلت العملية';
+            micro.textContent = `خطأ: ${err}`;
+        } else if (status === 'pending') {
+            micro.textContent = 'جاري التجهيز للعملية...';
+        } else if (metadata) {
+            const parts = [];
+            if (metadata.words)   parts.push(`${metadata.words.toLocaleString()} كلمة`);
+            if (metadata.count !== undefined) parts.push(`${metadata.count} نتيجة`);
+            if (metadata.method)  parts.push(metadata.method);
+            if (metadata.cb_state && metadata.cb_state !== 'closed') parts.push(`CB: ${metadata.cb_state}`);
+            micro.textContent = parts.join(' · ') || '—';
+        } else {
+            micro.textContent = label.length > 40 ? label.slice(0, 40) + '…' : label;
+        }
     }
 
     // Add retry button on failed nodes with can_retry
@@ -369,7 +380,10 @@ function startSSEStream(query, model) {
             currentSearchData = report;
             renderResultsList(report);
             renderAnalysis(report);
-            buildKnowledgeGraph(report);
+            const isGraphVisible = !document.getElementById('knowledgeGraphContainer').classList.contains('is-hidden');
+            if (isGraphVisible) {
+                buildKnowledgeGraph(report);
+            }
         } catch (_) {}
     });
 
