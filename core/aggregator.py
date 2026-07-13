@@ -326,7 +326,7 @@ class ResultAggregator:
         # إزالة الفئات الفارغة
         return {k: v for k, v in categories.items() if v}
     
-    async def aggregate(self, results: List[SearchResult], query: str) -> Dict[str, Any]:
+    async def aggregate(self, results: List[SearchResult], query: str, final_analysis: bool = True) -> Dict[str, Any]:
         """تجميع كامل للنتائج مع التحليل والتصنيف"""
         
         # 1. دمج المكررات
@@ -348,12 +348,24 @@ class ResultAggregator:
         # 3. تصنيف النتائج
         categorized = await self.categorize_results(ranked_results)
         
-        # 4. تحليل أفضل النتائج
         top_results = ranked_results[:config.max_final_results]
-        analyses = await self.analyzer.analyze_results_batch(top_results)
         
-        # 5. إنشاء تقرير شامل
-        report = await self.analyzer.generate_aggregated_report(top_results, analyses, query)
+        if final_analysis:
+            # 4. تحليل أفضل النتائج بالذكاء الاصطناعي
+            analyses = await self.analyzer.analyze_results_batch(top_results)
+            # 5. إنشاء تقرير شامل
+            report = await self.analyzer.generate_aggregated_report(top_results, analyses, query)
+        else:
+            # تقرير مبدئي سريع للتحديث التراكمي الحي
+            report = {
+                'summary': 'جاري استخراج ودمج البيانات المعرفية في الخلفية...',
+                'executive_summary': 'جاري استخراج ودمج البيانات المعرفية في الخلفية...',
+                'deep_analysis': 'جاري بناء الشبكة المعرفية...',
+                'keywords': self.analyzer.extract_keywords_tfidf(" ".join([r.title + " " + r.snippet for r in top_results]), 12) if top_results else [],
+                'statistics': {
+                    'sources_used': {r.source: 1 for r in top_results}
+                }
+            }
         
         return {
             'query': query,

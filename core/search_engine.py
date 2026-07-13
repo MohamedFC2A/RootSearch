@@ -734,7 +734,7 @@ class SearchEngine:
         unique_results.sort(key=lambda r: r.relevance_score, reverse=True)
         return unique_results[:config.max_final_results * 2]
 
-    async def search_all(self, query: str, deep_search: bool = False) -> List[SearchResult]:
+    async def search_all(self, query: str, model: str = "fathom_s1", deep_search: bool = False) -> List[SearchResult]:
         """بحث متوازي في كل المحركات + GraphCrawler semantic prioritisation"""
         self.results = []
 
@@ -755,6 +755,7 @@ class SearchEngine:
             "wikipedia": self.search_wikipedia,
         }
         engines_to_use = [e for e in config.search_engines if e in search_methods]
+        timeout_val = 15.0 if model == "fathom_max" else 6.0
 
         async def search_with_timeout(engine_name: str, func) -> tuple:
             self._emit("tree_node", {
@@ -765,7 +766,7 @@ class SearchEngine:
                 "parentId": "source_discovery",
             })
             try:
-                res = await asyncio.wait_for(func(query), timeout=15)
+                res = await asyncio.wait_for(func(query), timeout=timeout_val)
                 res = res or []
                 self._emit("node_status_update", {
                     "nodeId": f"engine_{engine_name}",

@@ -16,11 +16,19 @@ let searchStartTime    = 0;
 
 // Live Tree state
 const treeNodes = new Map();  // nodeId → DOM element
+let liveTreeNodes = null;
+let liveTreeEdges = null;
+let liveTreeNetwork = null;
+let currentTreeViewMode = 'visual'; // 'visual' | 'linear'
+
 
 // ─── INIT ─────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
     initSearchInput();
     loadSystemStatus();
+    initModelSelector();
+    makeSheetSwipable('nodeSheet', closeNodeSheet);
+    makeSheetSwipable('filterSheet', closeFilterSheet);
     // Keyboard shortcut Ctrl+K
     document.addEventListener('keydown', e => {
         if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
@@ -87,7 +95,17 @@ function switchTab(tabId) {
     if (panel) panel.classList.remove('is-hidden');
     const btn = document.getElementById(`tab_${tabId}`);
     if (btn) { btn.classList.add('active'); btn.setAttribute('aria-selected', 'true'); }
-    if (tabId === 'graph' && visNetworkInstance) setTimeout(() => visNetworkInstance.fit(), 150);
+    if (tabId === 'graph') {
+        if (currentSearchData) {
+            buildKnowledgeGraph(currentSearchData);
+        }
+        if (visNetworkInstance) {
+            setTimeout(() => {
+                visNetworkInstance.redraw();
+                visNetworkInstance.fit();
+            }, 150);
+        }
+    }
 }
 
 // ─── SEARCH INPUT MANAGEMENT ─────────────────────────────────
@@ -113,6 +131,7 @@ function resetSearch() {
     document.getElementById('clearBtn').style.display = 'none';
     document.getElementById('resultsSection').style.display = 'none';
     document.getElementById('heroSection').style.display = '';
+    document.body.classList.remove('results-active');
     treeNodes.clear();
     setStatusDot('idle', 'Ready');
 }
@@ -135,6 +154,7 @@ function handleSearch(e) {
     const resultsSection = document.getElementById('resultsSection');
     if (heroSection) heroSection.style.display = 'none';
     resultsSection.style.display = '';
+    document.body.classList.add('results-active');
 
     // Reset tree
     resetLiveTree();
@@ -143,8 +163,8 @@ function handleSearch(e) {
     switchTab('tree');
 
     // Start SSE stream
-    const deep = document.getElementById('deepSearch')?.checked ? 'true' : 'false';
-    startSSEStream(query, deep);
+    const model = document.getElementById('searchModelInput')?.value || 'fathom_s1';
+    startSSEStream(query, model);
 
     return false;
 }
@@ -201,7 +221,7 @@ function activateStageHeader(stage) {
     });
 }
 
-function createTreeNode(nodeId, stage, status, label, metadata) {
+function createTreeNode(nodeId, stage, status, label, metadata, parentId) {
     const col = document.getElementById(`col_${stage}`);
     if (!col) return null;
 
@@ -210,8 +230,6 @@ function createTreeNode(nodeId, stage, status, label, metadata) {
     node.dataset.nodeId = nodeId;
     node.dataset.status = status;
     node.dataset.stage = stage;
-
-    const iconClass = STAGE_ICONS[stage] || 'fas fa-circle';
 
     node.innerHTML = `
         <div class="node-status-row">
@@ -232,7 +250,7 @@ function createTreeNode(nodeId, stage, status, label, metadata) {
     return node;
 }
 
-function updateTreeNode(nodeId, status, label, metadata) {
+function updateTreeNode(nodeId, status, label, metadata, parentId) {
     let node = treeNodes.get(nodeId);
     if (!node) return;
 
@@ -278,6 +296,8 @@ function updateTreeNode(nodeId, status, label, metadata) {
     }
 }
 
+
+
 // ─── BOTTOM SHEET ─────────────────────────────────────────────
 function openNodeSheet(nodeId, stage, status, label, metadata) {
     const sheet = document.getElementById('nodeSheet');
@@ -322,22 +342,33 @@ function closeNodeSheet() {
 }
 
 // ─── SSE STREAM CONSUMER ──────────────────────────────────────
-function startSSEStream(query, deep) {
-    const url = `/api/search/stream?q=${encodeURIComponent(query)}&deep=${deep}`;
+function startSSEStream(query, model) {
+    const url = `/api/search/stream?q=${encodeURIComponent(query)}&model=${model}`;
     const sse = new EventSource(url);
     activeSSE = sse;
 
     setStatusDot('live', 'Searching...');
     document.getElementById('treeStatus').textContent = 'Pipeline starting...';
 
+    // partial_results: incremental updates from crawler
+    sse.addEventListener('partial_results', e => {
+        try {
+            const report = JSON.parse(e.data);
+            currentSearchData = report;
+            renderResultsList(report);
+            renderAnalysis(report);
+            buildKnowledgeGraph(report);
+        } catch (_) {}
+    });
+
     // tree_node: create a new node
     sse.addEventListener('tree_node', e => {
         try {
             const d = JSON.parse(e.data);
             if (!treeNodes.has(d.nodeId)) {
-                createTreeNode(d.nodeId, d.stage, d.status, d.label, d.metadata);
+                createTreeNode(d.nodeId, d.stage, d.status, d.label, d.metadata, d.parentId);
             } else {
-                updateTreeNode(d.nodeId, d.status, d.label, d.metadata);
+                updateTreeNode(d.nodeId, d.status, d.label, d.metadata, d.parentId);
             }
         } catch (_) { /* ignore parse errors */ }
     });
@@ -347,16 +378,16 @@ function startSSEStream(query, deep) {
         try {
             const d = JSON.parse(e.data);
             if (!treeNodes.has(d.nodeId)) {
-                // node may not exist yet on rapid events; skip
                 return;
             }
-            updateTreeNode(d.nodeId, d.status, d.label, d.metadata);
+            updateTreeNode(d.nodeId, d.status, d.label, d.metadata, d.parentId);
             // update status line with last interesting message
             if (['fetching','processing','success'].includes(d.status)) {
                 document.getElementById('treeStatus').textContent = d.label;
             }
         } catch (_) {}
     });
+
 
     // tree_edge: visual connector (currently handled by CSS column layout)
     sse.addEventListener('tree_edge', () => { /* structural; CSS handles it */ });
@@ -499,7 +530,7 @@ function renderResultsList(report) {
         return;
     }
 
-    // Build category nav
+    // Build category nav (Desktop)
     const catNav = document.getElementById('categoriesNav');
     const cats = report.categories || {};
     if (catNav && Object.keys(cats).length) {
@@ -512,6 +543,27 @@ function renderResultsList(report) {
                     ${categoryIcon(k)} ${k} (${v.length})
                 </button>`
             ).join('');
+    }
+
+    // Build mobile filter sheet items
+    const mobileFilterSheet = document.getElementById('filterSheetContent');
+    if (mobileFilterSheet && Object.keys(cats).length) {
+        mobileFilterSheet.innerHTML = `
+            <div class="mobile-filter-list">
+                <button class="mobile-filter-item active" onclick="selectMobileCategory('all')">
+                    <span class="m-fit-icon"><i class="fas fa-globe"></i></span>
+                    <span class="m-fit-label">الكل</span>
+                    <span class="m-fit-count">${results.length}</span>
+                </button>
+                ${Object.entries(cats).map(([k, v]) => `
+                    <button class="mobile-filter-item" onclick="selectMobileCategory('${k}')">
+                        <span class="m-fit-icon">${categoryIcon(k)}</span>
+                        <span class="m-fit-label">${k}</span>
+                        <span class="m-fit-count">${v.length}</span>
+                    </button>
+                `).join('')}
+            </div>
+        `;
     }
 
     // Render cards
@@ -576,8 +628,15 @@ function highlightTerms(text, query) {
 // Category filter
 let _allResults = [];
 function filterByCategory(cat, btn) {
-    document.querySelectorAll('.category-filter-btn').forEach(b => b.classList.remove('active'));
-    btn.classList.add('active');
+    document.querySelectorAll('.category-filter-btn').forEach(b => {
+        const isActive = b.getAttribute('onclick')?.includes(`'${cat}'`);
+        b.classList.toggle('active', !!isActive);
+    });
+
+    document.querySelectorAll('.mobile-filter-item').forEach(b => {
+        const isActive = b.getAttribute('onclick')?.includes(`'${cat}'`);
+        b.classList.toggle('active', !!isActive);
+    });
 
     const list = document.getElementById('resultsList');
     if (!currentSearchData) return;
@@ -599,49 +658,196 @@ function buildKnowledgeGraph(report) {
     const edges = new vis.DataSet();
     const results = report.results || [];
     const analysis = report.analysis || {};
-    const kws = (analysis.keywords || analysis.top_keywords || []).slice(0, 15);
+    const kws = (analysis.keywords || analysis.top_keywords || []).slice(0, 10);
 
-    // Center node
-    nodes.add({ id: 'query', label: escapeHtml(report.query || ''), shape: 'box',
-        color: { background: '#1A1E26', border: '#4A6CF7', highlight: { background: '#1A1E26', border: '#4A6CF7' } },
-        font: { color: '#E2E6EF', size: 14 }, borderWidth: 2 });
-
-    // Source nodes
-    results.slice(0, 20).forEach((r, i) => {
-        const id = `r${i}`;
-        const dom = (r.url || '').replace(/https?:\/\//, '').split('/')[0];
-        nodes.add({ id, label: escapeHtml(dom || r.title?.slice(0,20) || `Result ${i+1}`),
-            shape: 'box', size: 12,
-            color: { background: r.metadata?.scraped ? '#0A1F14' : '#12151A',
-                     border: r.metadata?.scraped ? '#2A6B48' : '#2E3344' },
-            font: { color: '#8892A4', size: 11 } });
-        edges.add({ from: 'query', to: id, color: { color: '#222630' } });
+    // 1. Center / Root Query Node
+    nodes.add({
+        id: 'query',
+        label: escapeHtml(report.query || 'البحث'),
+        shape: 'box',
+        color: { background: '#0a0d16', border: '#4A6CF7', highlight: { background: '#0a0d16', border: '#4A6CF7' } },
+        font: { color: '#E2E6EF', size: 14, face: 'Cairo', bold: true },
+        borderWidth: 2,
+        margin: 10
     });
 
-    // Keyword nodes
+    // Tracking created intermediate nodes to avoid duplicates
+    const createdSubqueries = new Set();
+    const createdEngines = new Set();
+
+    // 2. Iterate through results to build the branching tree
+    results.forEach((r, i) => {
+        const id = getUrlId(r.url);
+        if (nodes.get(id)) return;
+
+        const domain = (r.url || '').replace(/https?:\/\//, '').split('/')[0];
+        const isScraped = r.metadata?.scraped;
+
+        // Add result node
+        nodes.add({
+            id,
+            label: escapeHtml(domain || r.title?.slice(0, 20) || `نتيجة ${i + 1}`),
+            shape: 'box',
+            color: {
+                background: isScraped ? '#05160e' : '#12151A',
+                border: isScraped ? '#10b981' : '#2E3344',
+                highlight: { background: isScraped ? '#05160e' : '#12151A', border: '#4a6cf7' }
+            },
+            font: { color: isScraped ? '#E2E6EF' : '#8892A4', size: 11, face: 'Cairo' },
+            margin: 8,
+            borderWidth: 1.5
+        });
+
+        // Determine hierarchy lineage
+        let parentNodeId = 'query'; // default parent
+
+        // Extract subquery and discovery metadata
+        const subqueryText = r.metadata?.subquery || report.query;
+        const subqueryIdx = r.metadata?.subquery_idx !== undefined ? r.metadata.subquery_idx : 0;
+        const subqueryNodeId = `sub_${subqueryIdx}`;
+
+        // Create Subquery node if not exists
+        if (subqueryText) {
+            if (!createdSubqueries.has(subqueryNodeId)) {
+                createdSubqueries.add(subqueryNodeId);
+                nodes.add({
+                    id: subqueryNodeId,
+                    label: escapeHtml(subqueryIdx === 0 ? `الأساسي: "${subqueryText}"` : `تفريعة: "${subqueryText}"`),
+                    shape: 'box',
+                    color: { background: '#13111c', border: '#8b5cf6' },
+                    font: { color: '#D6BCFA', size: 11, face: 'Cairo' },
+                    margin: 8,
+                    borderWidth: 1
+                });
+                // Connect Query -> Subquery
+                edges.add({
+                    from: 'query',
+                    to: subqueryNodeId,
+                    color: { color: '#4B5563' },
+                    width: 1.5
+                });
+            }
+            parentNodeId = subqueryNodeId;
+        }
+
+        // Create Engine node under subquery if discovery node exists
+        const discoveryNode = r.metadata?.discovery_node;
+        if (discoveryNode) {
+            const parts = discoveryNode.split('_');
+            const engineName = parts.length >= 3 ? parts.slice(2).join('_') : parts.join('_');
+            const engineNodeId = `eng_${subqueryNodeId}_${engineName}`;
+
+            if (!createdEngines.has(engineNodeId)) {
+                createdEngines.add(engineNodeId);
+                nodes.add({
+                    id: engineNodeId,
+                    label: escapeHtml(engineName.toUpperCase()),
+                    shape: 'ellipse',
+                    color: { background: '#0e172a', border: '#3b82f6' },
+                    font: { color: '#90CDF4', size: 10, face: 'Cairo' },
+                    borderWidth: 1
+                });
+                // Connect Subquery -> Engine
+                edges.add({
+                    from: subqueryNodeId,
+                    to: engineNodeId,
+                    color: { color: '#3A4256' },
+                    width: 1
+                });
+            }
+            parentNodeId = engineNodeId;
+        }
+
+        // Connect parent to result
+        // Wait! What if this result is a subpage (link trace) with parent_url?
+        if (r.metadata?.parent_url) {
+            const parentUrlId = getUrlId(r.metadata.parent_url);
+            // Connect Parent URL Node -> Child URL Node directly!
+            if (nodes.get(parentUrlId)) {
+                edges.add({
+                    from: parentUrlId,
+                    to: id,
+                    color: { color: '#10b981' }, // green for link traces
+                    width: 1.2,
+                    arrows: { to: { enabled: true, scaleFactor: 0.4 } }
+                });
+                return; // skip connecting to engine
+            }
+        }
+
+        // Connect parent to result
+        edges.add({
+            from: parentNodeId,
+            to: id,
+            color: { color: '#2E3344' },
+            width: 1,
+            arrows: { to: { enabled: true, scaleFactor: 0.4 } }
+        });
+    });
+
+    // 3. Connect Keywords as floating cloud connected to main query
     kws.forEach((kw, i) => {
         const word = typeof kw === 'string' ? kw : (kw.word || '');
         if (!word) return;
         const id = `kw${i}`;
-        nodes.add({ id, label: escapeHtml(word), shape: 'ellipse', size: 10,
-            color: { background: '#0F1A40', border: '#2A4ABF' },
-            font: { color: '#7E8799', size: 10 } });
-        edges.add({ from: 'query', to: id, color: { color: '#1E2330' }, dashes: true });
+        nodes.add({
+            id,
+            label: escapeHtml(word),
+            shape: 'ellipse',
+            color: { background: '#1A140A', border: '#f59e0b' },
+            font: { color: '#fbd38d', size: 9, face: 'Cairo' },
+            borderWidth: 1
+        });
+        edges.add({
+            from: 'query',
+            to: id,
+            color: { color: '#B7791F' },
+            dashes: true,
+            width: 0.8
+        });
     });
 
     const graphData = { nodes, edges };
     visNetworkData = graphData;
 
+    // Use Left-to-Right hierarchical layout for the sources graph!
     const opts = {
-        physics: { enabled: true, stabilization: { iterations: 80 },
-            barnesHut: { gravitationalConstant: -6000, springLength: 180 } },
-        interaction: { hover: true, tooltipDelay: 200 },
-        layout: { improvedLayout: true },
-        edges: { smooth: { type: 'cubicBezier' }, arrows: { to: { enabled: true, scaleFactor: 0.4 } } },
+        nodes: {
+            shadow: { enabled: true, color: 'rgba(0,0,0,0.5)', size: 4, x: 0, y: 2 }
+        },
+        edges: {
+            smooth: { type: 'cubicBezier', forceDirection: 'horizontal', roundness: 0.6 }
+        },
+        layout: {
+            hierarchical: {
+                direction: 'LR',
+                sortMethod: 'directed',
+                nodeSpacing: 100,
+                levelSeparation: 250,
+                parentCentralization: true
+            }
+        },
+        physics: {
+            enabled: isGraphPhysicsEnabled,
+            hierarchicalRepulsion: {
+                nodeSpacing: 120,
+                centralGravity: 0.0,
+                springLength: 150,
+                damping: 0.09
+            },
+            solver: 'hierarchicalRepulsion'
+        },
+        interaction: {
+            hover: true,
+            zoomView: true,
+            dragView: true,
+            tooltipDelay: 200
+        }
     };
 
     visNetworkInstance = new vis.Network(container, graphData, opts);
 
+    // Clicking a node updates details sidebar
     visNetworkInstance.on('click', params => {
         if (!params.nodes.length) return;
         const id = params.nodes[0];
@@ -651,13 +857,46 @@ function buildKnowledgeGraph(report) {
         if (empty) empty.style.display = 'none';
         if (details) {
             details.style.display = '';
-            const r = id.startsWith('r') ? results[parseInt(id.slice(1))] : null;
+            const r = results.find(res => getUrlId(res.url) === id);
             if (r) {
+                const scrapedText = r.metadata?.scraped ? '<span class="status-badge success">تم سحب المحتوى</span>' : '<span class="status-badge failed">لم يسحب المحتوى</span>';
                 details.innerHTML = `
                     <h4 style="font-size:14px;margin-bottom:8px">${escapeHtml(r.title || '')}</h4>
                     <a href="${escapeHtml(r.url)}" target="_blank" style="font-size:11px;color:var(--accent);word-break:break-all">${escapeHtml(r.url)}</a>
+                    <div style="margin-top:8px">${scrapedText}</div>
                     <p style="margin-top:10px;font-size:12px;color:var(--text-secondary)">${escapeHtml((r.snippet || '').slice(0, 200))}</p>
                 `;
+            } else {
+                const kwIndex = id.startsWith('kw') ? parseInt(id.slice(2)) : -1;
+                const kwName = kwIndex >= 0 && kws[kwIndex] ? (typeof kws[kwIndex] === 'string' ? kws[kwIndex] : kws[kwIndex].word) : '';
+                if (kwName) {
+                    details.innerHTML = `
+                        <h4 style="font-size:14px;margin-bottom:8px"><i class="fas fa-tag"></i> ${escapeHtml(kwName)}</h4>
+                        <p style="font-size:12px;color:var(--text-secondary)">كلمة مفتاحية تم استخراجها وتحليلها سياقياً.</p>
+                        <button class="ghost-btn" style="margin-top:10px;width:100%" onclick="openKeywordModal('${escapeHtml(kwName)}')">عرض التفاصيل</button>
+                    `;
+                } else if (id === 'query') {
+                    details.innerHTML = `
+                        <h4 style="font-size:14px;margin-bottom:8px"><i class="fas fa-search"></i> استعلام البحث</h4>
+                        <p style="font-size:12px;color:var(--text-secondary)">"${escapeHtml(report.query || '')}"</p>
+                    `;
+                } else if (id.startsWith('sub_')) {
+                    const subIndex = parseInt(id.split('_')[1]);
+                    const subText = results.find(res => res.metadata?.subquery_idx === subIndex)?.metadata?.subquery || '';
+                    details.innerHTML = `
+                        <h4 style="font-size:14px;margin-bottom:8px"><i class="fas fa-code-branch"></i> تفريعة استعلام فرعي</h4>
+                        <p style="font-size:12px;color:var(--text-secondary)">"${escapeHtml(subText)}"</p>
+                    `;
+                } else if (id.startsWith('eng_')) {
+                    const engineName = id.split('_')[2];
+                    details.innerHTML = `
+                        <h4 style="font-size:14px;margin-bottom:8px"><i class="fas fa-search"></i> محرك البحث</h4>
+                        <p style="font-size:12px;color:var(--text-secondary)">محرك ${escapeHtml(engineName.toUpperCase())} المستخدم لاكتشاف المصادر.</p>
+                    `;
+                } else {
+                    if (empty) empty.style.display = '';
+                    details.style.display = 'none';
+                }
             }
         }
     });
@@ -806,4 +1045,151 @@ function escapeHtml(str) {
         .replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;')
         .replace(/'/g, '&#x27;');
+}
+
+function getUrlId(url) {
+    if (!url) return '';
+    let hash = 0;
+    for (let i = 0; i < url.length; i++) {
+        hash = (hash << 5) - hash + url.charCodeAt(i);
+        hash |= 0;
+    }
+    return 'node_' + Math.abs(hash).toString(36);
+}
+
+function toggleModelDropdown() {
+    const wrap = document.querySelector('.model-dropdown-wrap');
+    if (!wrap) return;
+    const isOpen = wrap.classList.contains('open');
+    if (isOpen) {
+        wrap.classList.remove('open');
+        document.getElementById('modelDropdownTrigger')?.setAttribute('aria-expanded', 'false');
+    } else {
+        wrap.classList.add('open');
+        document.getElementById('modelDropdownTrigger')?.setAttribute('aria-expanded', 'true');
+    }
+}
+
+function selectDropdownModel(model) {
+    const input = document.getElementById('searchModelInput');
+    const triggerIcon = document.querySelector('.model-dropdown-trigger .dropdown-icon-active');
+    const triggerLabel = document.querySelector('.model-dropdown-trigger .dropdown-label-active');
+    const wrap = document.querySelector('.model-dropdown-wrap');
+    
+    if (input) input.value = model;
+    localStorage.setItem('selectedSearchModel', model);
+
+    // Update active class in items
+    document.querySelectorAll('.model-dropdown-item').forEach(item => {
+        const isTarget = item.getAttribute('data-value') === model;
+        item.classList.toggle('active', isTarget);
+        item.setAttribute('aria-selected', isTarget ? 'true' : 'false');
+    });
+
+    // Update wrap model selection class
+    if (wrap) {
+        wrap.classList.toggle('fathom-max-selected', model === 'fathom_max');
+        const capsule = wrap.closest('.search-input-capsule');
+        if (capsule) {
+            capsule.classList.toggle('fathom-max-selected', model === 'fathom_max');
+        }
+        const form = wrap.closest('#searchForm');
+        if (form) {
+            form.classList.toggle('fathom-max-selected', model === 'fathom_max');
+        }
+    }
+
+    // Update trigger UI
+    if (model === 'fathom_s1') {
+        if (triggerIcon) {
+            triggerIcon.className = 'fas fa-bolt dropdown-icon-active';
+        }
+        if (triggerLabel) triggerLabel.textContent = 'S1';
+    } else {
+        if (triggerIcon) {
+            triggerIcon.className = 'fas fa-spider dropdown-icon-active';
+        }
+        if (triggerLabel) triggerLabel.textContent = 'Max';
+    }
+
+    // Close dropdown
+    if (wrap) {
+        wrap.classList.remove('open');
+        document.getElementById('modelDropdownTrigger')?.setAttribute('aria-expanded', 'false');
+    }
+}
+
+// Close dropdown on click outside
+document.addEventListener('click', e => {
+    const wrap = document.querySelector('.model-dropdown-wrap');
+    if (wrap && !wrap.contains(e.target)) {
+        wrap.classList.remove('open');
+        document.getElementById('modelDropdownTrigger')?.setAttribute('aria-expanded', 'false');
+    }
+});
+
+// Restore last used model from localStorage
+function initModelSelector() {
+    const savedModel = localStorage.getItem('selectedSearchModel');
+    if (savedModel) {
+        selectDropdownModel(savedModel);
+    }
+}
+
+function makeSheetSwipable(sheetId, closeCallback) {
+    const sheet = document.getElementById(sheetId);
+    if (!sheet) return;
+
+    let startY = 0;
+    let currentY = 0;
+    let isDragging = false;
+
+    sheet.addEventListener('touchstart', e => {
+        startY = e.touches[0].clientY;
+        isDragging = true;
+        sheet.style.transition = 'none';
+    }, { passive: true });
+
+    sheet.addEventListener('touchmove', e => {
+        if (!isDragging) return;
+        currentY = e.touches[0].clientY;
+        const deltaY = currentY - startY;
+        if (deltaY > 0) {
+            sheet.style.transform = `translateY(${deltaY}px)`;
+        }
+    }, { passive: true });
+
+    sheet.addEventListener('touchend', e => {
+        if (!isDragging) return;
+        isDragging = false;
+        sheet.style.transition = '';
+        
+        const deltaY = currentY - startY;
+        if (deltaY > 100) {
+            closeCallback();
+        }
+        sheet.style.transform = '';
+        startY = 0;
+        currentY = 0;
+    });
+}
+
+function openFilterSheet() {
+    const sheet = document.getElementById('filterSheet');
+    const backdrop = document.getElementById('filterSheetBackdrop');
+    if (sheet) { sheet.classList.add('open'); sheet.setAttribute('aria-hidden', 'false'); }
+    if (backdrop) backdrop.style.display = 'block';
+}
+
+function closeFilterSheet() {
+    const sheet = document.getElementById('filterSheet');
+    const backdrop = document.getElementById('filterSheetBackdrop');
+    if (sheet) { sheet.classList.remove('open'); sheet.setAttribute('aria-hidden', 'true'); }
+    if (backdrop) backdrop.style.display = 'none';
+}
+
+function selectMobileCategory(cat) {
+    const btnMock = document.createElement('button');
+    filterByCategory(cat, btnMock);
+    closeFilterSheet();
 }

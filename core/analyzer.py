@@ -724,3 +724,42 @@ class AIAnalyzer:
         if explanation:
             return explanation
         return f"مفهوم مرتبط بموضوع البحث: {query}."
+
+    async def expand_query(self, query: str) -> List[str]:
+        """توسيع الاستعلام إلى 3 استعلامات فرعية أكثر تخصصاً وتفرعاً"""
+        await self.initialize()
+        if self.gemini_model:
+            try:
+                prompt = (
+                    f"You are part of a deep search engine called RootSearch. "
+                    f"Given the user search query: '{query}', generate exactly 3 distinct, highly targeted, "
+                    f"and relevant sub-queries or search terms to explore different angles of the query "
+                    f"for a comprehensive search. "
+                    f"Return ONLY a JSON list of strings, with no explanation and no markdown block. "
+                    f"Example: [\"term 1\", \"term 2\", \"term 3\"]"
+                )
+                response = await asyncio.to_thread(self.gemini_model.generate_content, prompt)
+                text = response.text.strip()
+                # Clean code blocks if LLM ignored instructions
+                if text.startswith("```"):
+                    text = re.sub(r"^```(?:json)?\n|\n```$", "", text, flags=re.MULTILINE).strip()
+                subqueries = json.loads(text)
+                if isinstance(subqueries, list) and len(subqueries) > 0:
+                    return [str(q).strip() for q in subqueries[:3]]
+            except Exception as e:
+                print(f"[⚠️] Failed to expand query using Gemini: {e}")
+        
+        # Fallback: heuristics based on query language
+        words = [w for w in re.findall(r"\w+", query) if len(w) > 2]
+        if not words:
+            return []
+            
+        # Check if Arabic
+        is_arabic = bool(re.search(r"[\u0600-\u06FF]", query))
+        if is_arabic:
+            exts = ["تفاصيل وتحليل", "تطبيقات وأمثلة", "أحدث التطورات"]
+            return [f"{query} {ext}" for ext in exts]
+        else:
+            exts = ["detailed analysis", "applications and examples", "latest developments"]
+            return [f"{query} {ext}" for ext in exts]
+

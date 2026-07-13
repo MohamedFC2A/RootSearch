@@ -3,13 +3,50 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-    <meta name="description" content="RootSearch — محرك بحث عميق يكشف ما تخفيه الإنترنت بتحليل ذكي وخرائط مصادر حية">
-    <meta name="theme-color" content="#0D0F12">
-    <title>RootSearch — Deep Intelligence Search</title>
+    
+    <!-- SEO & Metadata -->
+    <title>RootSearch — Deep Cognitive Intelligence Search Engine</title>
+    <meta name="description" content="منصة ذكاء اصطناعي موثقة لتحليل وتتبع مصادر الويب وتصنيف العلاقات المعرفية والشجرية الحية">
+    <link rel="canonical" href="http://localhost:6969/">
+    
+    <!-- Open Graph / Facebook -->
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="http://localhost:6969/">
+    <meta property="og:title" content="RootSearch — Deep Intelligence Search">
+    <meta property="og:description" content="منصة ذكاء اصطناعي موثقة لتحليل وتتبع مصادر الويب وتصنيف العلاقات المعرفية والشجرية الحية">
+    <meta property="og:image" content="http://localhost:6969/static/og-image.png">
+    
+    <!-- Twitter -->
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:url" content="http://localhost:6969/">
+    <meta name="twitter:title" content="RootSearch — Deep Intelligence Search">
+    <meta name="twitter:description" content="منصة ذكاء اصطناعي موثقة لتحليل وتتبع مصادر الويب وتصنيف العلاقات المعرفية والشجرية الحية">
+    <meta name="twitter:image" content="http://localhost:6969/static/og-image.png">
+    
+    <!-- JSON-LD Structured Data -->
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "WebSite",
+      "name": "RootSearch",
+      "url": "http://localhost:6969/",
+      "description": "منصة ذكاء اصطناعي موثقة لتحليل وتتبع مصادر الويب وتصنيف العلاقات المعرفية والشجرية الحية",
+      "potentialAction": {
+        "@type": "SearchAction",
+        "target": {
+          "@type": "EntryPoint",
+          "urlTemplate": "http://localhost:6969/?q={search_term_string}"
+        },
+        "query-input": "required name=search_term_string"
+      }
+    }
+    </script>
+
+    <meta name="theme-color" content="#090D16">
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⬡</text></svg>">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Cairo:wght@300;400;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=Cairo:wght@300;400;600;700&family=Space+Mono:wght@400;700&family=JetBrains+Mono:wght@400;500&family=Syncopate:wght@700&family=Space+Grotesk:wght@700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
     <script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
@@ -28,6 +65,11 @@
             <span class="brand-name">RootSearch</span>
             <span class="brand-version">v3</span>
         </div>
+        <nav class="header-nav" aria-label="التنقل الرئيسي">
+            <a href="#about" class="nav-link">حول المحرك</a>
+            <a href="#api" class="nav-link">مطورين API</a>
+            <a href="#enterprise" class="nav-link">المؤسسات</a>
+        </nav>
         <div class="header-status" id="headerStatus">
             <span class="status-dot" id="statusDot"></span>
             <span id="statusLabel">Ready</span>
@@ -47,8 +89,9 @@
             </h1>
             <p class="hero-sub">يكشف ما تخفيه الإنترنت — بتحليل حي لكل مصدر</p>
 
-            <form id="searchForm" class="search-bar" onsubmit="return handleSearch(event)" role="search" aria-label="نموذج البحث">
-                <div class="search-field-wrap">
+            <form id="searchForm" class="search-form-premium" onsubmit="return handleSearch(event)" role="search" aria-label="نموذج البحث">
+                <!-- Row 1: Unified input capsule -->
+                <div class="search-input-capsule">
                     <i class="fas fa-search search-icon-inner" aria-hidden="true"></i>
                     <input
                         type="text"
@@ -60,21 +103,43 @@
                         aria-label="استعلام البحث"
                         enterkeyhint="search"
                     />
-                    <button type="button" class="clear-btn" id="clearBtn" onclick="clearSearch()" aria-label="مسح" style="display:none">
+                    <button type="button" class="clear-btn" id="clearBtn" onclick="clearSearch()" aria-label="مسح" style="display:none;">
                         <i class="fas fa-times" aria-hidden="true"></i>
                     </button>
-                </div>
-                <div class="search-controls">
-                    <label class="toggle-label">
-                        <input type="checkbox" id="deepSearch" checked>
-                        <span class="toggle-track"><span class="toggle-thumb"></span></span>
-                        <span class="toggle-text"><i class="fas fa-brain"></i> بحث عميق</span>
-                    </label>
-                    <button type="submit" class="search-btn" id="searchSubmitBtn">
+                    
+                    <!-- Sleek Minimal Model Dropdown Selector -->
+                    <div class="model-dropdown-wrap">
+                        <button type="button" class="model-dropdown-trigger" id="modelDropdownTrigger" onclick="toggleModelDropdown()" aria-haspopup="listbox" aria-expanded="false">
+                            <i class="fas fa-bolt dropdown-icon-active"></i>
+                            <span class="dropdown-label-active">S1</span>
+                            <i class="fas fa-chevron-down dropdown-arrow"></i>
+                        </button>
+                        <ul class="model-dropdown-menu" id="modelDropdownMenu" role="listbox" aria-label="اختر محرك البحث">
+                            <li class="model-dropdown-item active" onclick="selectDropdownModel('fathom_s1')" role="option" aria-selected="true" data-value="fathom_s1">
+                                <i class="fas fa-bolt"></i>
+                                <div class="item-text">
+                                    <span class="item-title">Fathom S1</span>
+                                    <span class="item-desc">البحث البرقي السريع</span>
+                                </div>
+                            </li>
+                            <li class="model-dropdown-item" onclick="selectDropdownModel('fathom_max')" role="option" aria-selected="false" data-value="fathom_max">
+                                <i class="fas fa-spider"></i>
+                                <div class="item-text">
+                                    <span class="item-title">Fathom Max</span>
+                                    <span class="item-desc">التنقيب العميق المتقدم</span>
+                                </div>
+                            </li>
+                        </ul>
+                        <!-- Hidden input to store selected value -->
+                        <input type="hidden" name="searchModel" id="searchModelInput" value="fathom_s1">
+                    </div>
+
+                    <button type="submit" class="search-submit-btn-embedded" id="searchSubmitBtn">
                         <span>ابحث</span>
                         <i class="fas fa-arrow-left" aria-hidden="true"></i>
                     </button>
                 </div>
+
                 <div class="search-meta">
                     <span><i class="fas fa-database" aria-hidden="true"></i> <span id="engineCount">3</span> محركات</span>
                     <span><i class="fas fa-microchip" aria-hidden="true"></i> AI</span>
@@ -174,6 +239,7 @@
                 </div>
             </div>
 
+
             <!-- Mobile bottom sheet for node details -->
             <div class="node-sheet" id="nodeSheet" aria-hidden="true">
                 <div class="sheet-handle"></div>
@@ -238,6 +304,11 @@
 
         <!-- ─── RESULTS LIST ──────────────────────────────── -->
         <div id="resultsListWrapper" class="tab-content is-hidden" role="tabpanel" aria-labelledby="tab_results">
+            <div class="mobile-filter-bar">
+                <button type="button" class="mobile-filter-trigger" id="mobileFilterTriggerBtn" onclick="openFilterSheet()">
+                    <i class="fas fa-filter"></i> تصفية الفئات
+                </button>
+            </div>
             <div class="categories-nav" id="categoriesNav"></div>
             <div class="results-list" id="resultsList">
                 <div class="loading-state" id="loadingState">
@@ -293,6 +364,17 @@
         </div>
     </div>
 </div>
+
+<!-- Category Filter Bottom Sheet (Mobile) -->
+<div class="node-sheet" id="filterSheet" aria-hidden="true">
+    <div class="sheet-handle"></div>
+    <h3 style="font-size:16px;margin-bottom:12px;text-align:center;"><i class="fas fa-filter"></i> اختر فئة النتائج</h3>
+    <div class="sheet-content" id="filterSheetContent">
+        <!-- Category items will be injected here dynamically -->
+    </div>
+    <button class="sheet-close" onclick="closeFilterSheet()">إغلاق</button>
+</div>
+<div class="sheet-backdrop" id="filterSheetBackdrop" onclick="closeFilterSheet()"></div>
 
 <script src="/static/script.js"></script>
 </body>

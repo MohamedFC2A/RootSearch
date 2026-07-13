@@ -39,12 +39,13 @@ class FuckenSearch:
         self.scraper = DeepScraper(on_event=on_event)
         self.aggregator = ResultAggregator()
     
-    async def deep_search(self, query: str, deep_analysis: bool = True) -> dict:
+    async def deep_search(self, query: str, model: str = "fathom_s1", deep_analysis: bool = True) -> dict:
         """
         البحث العميق الخارق
         
         Args:
             query: استعلام البحث
+            model: fathom_s1 أو fathom_max
             deep_analysis: هل نقوم بتحليل عميق أم بحث سريع
         
         Returns:
@@ -52,11 +53,12 @@ class FuckenSearch:
         """
         print(f"\n[🔍] Fucken Search: بدء البحث العميق...")
         print(f"[📝] الاستعلام: {query}")
+        print(f"[⚙️]  النموذج: {model}")
         print(f"[⚙️]  الوضع: {'تحليل عميق' if deep_analysis else 'بحث سريع'}")
         
         # 1. البحث في جميع محركات البحث
         print(f"\n[🌐] البحث في {len(config.search_engines)} محركات بحث...")
-        results = await self.search_engine.search_all(query)
+        results = await self.search_engine.search_all(query, model=model)
         print(f"[✅] تم العثور على {len(results)} نتيجة (قبل التصفية)")
         
         if not results:
@@ -70,14 +72,24 @@ class FuckenSearch:
         # 2. تسليق المحتوى (إذا كان تحليل عميق)
         if deep_analysis:
             print(f"\n[🕷️]  تسليق المواقع واستخراج المحتوى...")
-            enriched_results = await self.scraper.scrape_batch(results, max_pages=30)
+            if model == "fathom_max":
+                enriched_results = await self.scraper.scrape_recursive(
+                    seeds=results,
+                    query=query,
+                    max_nodes=40,
+                    max_depth=3,
+                    concurrency=4,
+                    aggregator=self.aggregator
+                )
+            else:
+                enriched_results = await self.scraper.scrape_batch(results, max_pages=15)
             print(f"[✅] تم تسليق {sum(1 for r in enriched_results if r.content)} صفحة بنجاح")
         else:
             enriched_results = results
         
         # 3. تجميع وترتيب وتحليل
         print(f"\n[🧠] تجميع وتحليل النتائج...")
-        final_report = await self.aggregator.aggregate(enriched_results, query)
+        final_report = await self.aggregator.aggregate(enriched_results, query, final_analysis=True)
         
         print(f"\n[🏆] اكتمل البحث العميق!")
         print(f"[📊] إجمالي النتائج: {final_report['total_results']}")
@@ -87,7 +99,7 @@ class FuckenSearch:
     
     async def quick_search(self, query: str) -> dict:
         """بحث سريع بدون تحليل عميق"""
-        return await self.deep_search(query, deep_analysis=False)
+        return await self.deep_search(query, model="fathom_s1", deep_analysis=False)
     
     async def close(self):
         """تنظيف الموارد"""

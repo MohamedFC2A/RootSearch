@@ -123,7 +123,7 @@ async def home_head():
 @app.get("/api/search")
 async def api_search(
     q: str = Query(..., min_length=1, max_length=500),
-    deep: bool = Query(True),
+    model: str = Query("fathom_s1"),
     page: int = Query(1, ge=1),
     nocache: bool = Query(False),
 ):
@@ -131,21 +131,21 @@ async def api_search(
     if not q:
         return JSONResponse({"error": "يرجى إدخال استعلام البحث", "status": "error"}, status_code=400)
 
-    cache_key = f"{q.lower()}:{deep}:{page}"
+    cache_key = f"{q.lower()}:{model}:{page}"
     if not nocache and cache_key in search_cache:
         return JSONResponse(search_cache[cache_key])
 
     try:
         engine = FuckenSearch()
         try:
-            report = await engine.deep_search(q, deep_analysis=deep)
+            report = await engine.deep_search(q, model=model, deep_analysis=True)
         finally:
             await engine.close()
 
         response_data = {
             "status": "success",
             "query": q,
-            "deep_search": deep,
+            "model": model,
             "timestamp": datetime.now().isoformat(),
             "data": report,
             "pagination": {"page": page, "total": report.get("total_results", 0), "per_page": 20},
@@ -161,7 +161,7 @@ async def api_search(
 @app.get("/api/search/stream")
 async def api_search_stream(
     q: str = Query(..., min_length=1, max_length=500),
-    deep: bool = Query(True),
+    model: str = Query("fathom_s1"),
     nocache: bool = Query(False),
 ):
     """
@@ -170,7 +170,7 @@ async def api_search_stream(
     Each stage emits tree_node / node_status_update / tree_edge events consumed by the frontend.
     """
     q = q.strip()
-    cache_key = f"{q.lower()}:{deep}:1"
+    cache_key = f"{q.lower()}:{model}:1"
 
     # ── Serve from cache immediately ──
     if not nocache and cache_key in search_cache:
@@ -222,6 +222,17 @@ async def api_search_stream(
                 "parentId": "trigger",
             }))
 
+            from core.analyzer import AIAnalyzer
+            analyzer = AIAnalyzer()
+            
+            # Perform query expansion (branching)
+            subqueries = [q]  # Always include the original query
+            try:
+                expanded = await analyzer.expand_query(q)
+                subqueries.extend(expanded)
+            except Exception as e:
+                print(f"[Query Expansion Error] {e}")
+
             all_engine_funcs = {
                 "google":     engine.search_engine.search_google,
                 "bing":       engine.search_engine.search_bing,
@@ -232,20 +243,43 @@ async def api_search_stream(
             }
             active_engines = set(config.search_engines) | {"duckduckgo", "wikipedia"}
             engine_funcs = {k: v for k, v in all_engine_funcs.items() if k in active_engines}
+            timeout_val = 15.0 if model == "fathom_max" else 6.0
 
-            async def run_engine(name: str, func):
+            # Emit the subquery nodes
+            for idx, sq in enumerate(subqueries):
+                sq_id = f"subquery_{idx}"
                 event_queue.put_nowait(("tree_node", {
-                    "nodeId": f"engine_{name}",
+                    "nodeId": sq_id,
+                    "stage": "source_discovery",
+                    "status": "success",
+                    "label": f'Main query' if idx == 0 else f'Branch: "{sq}"',
+                    "parentId": "trigger",
+                    "metadata": {"query": sq}
+                }))
+
+            async def run_engine(sub_idx: int, sub_text: str, name: str, func):
+                sq_id = f"subquery_{sub_idx}"
+                engine_node_id = f"engine_{sub_idx}_{name}"
+                
+                event_queue.put_nowait(("tree_node", {
+                    "nodeId": engine_node_id,
                     "stage": "source_discovery",
                     "status": "fetching",
                     "label": f"Querying {name.capitalize()}...",
-                    "parentId": "source_discovery",
+                    "parentId": sq_id,
                 }))
                 try:
-                    res = await asyncio.wait_for(func(q), timeout=15.0)
+                    res = await asyncio.wait_for(func(sub_text), timeout=timeout_val)
                     res = res or []
+                    for r in res:
+                        if not r.metadata:
+                            r.metadata = {}
+                        r.metadata["discovery_node"] = engine_node_id
+                        r.metadata["subquery_idx"] = sub_idx
+                        r.metadata["subquery"] = sub_text
+                    
                     event_queue.put_nowait(("node_status_update", {
-                        "nodeId": f"engine_{name}",
+                        "nodeId": engine_node_id,
                         "status": "success" if res else "failed",
                         "label": (f"{name.capitalize()}: {len(res)} results"
                                   if res else f"{name.capitalize()}: no results"),
@@ -254,18 +288,22 @@ async def api_search_stream(
                     return name, res
                 except asyncio.TimeoutError:
                     event_queue.put_nowait(("node_status_update", {
-                        "nodeId": f"engine_{name}", "status": "failed",
+                        "nodeId": engine_node_id, "status": "failed",
                         "label": f"{name.capitalize()}: timed out",
                     }))
                     return name, []
                 except Exception as exc:
                     event_queue.put_nowait(("node_status_update", {
-                        "nodeId": f"engine_{name}", "status": "failed",
+                        "nodeId": engine_node_id, "status": "failed",
                         "label": f"{name.capitalize()}: {type(exc).__name__}",
                     }))
                     return name, []
 
-            search_tasks = [asyncio.create_task(run_engine(n, f)) for n, f in engine_funcs.items()]
+            search_tasks = []
+            for sub_idx, sub_text in enumerate(subqueries):
+                for name, func in engine_funcs.items():
+                    task = asyncio.create_task(run_engine(sub_idx, sub_text, name, func))
+                    search_tasks.append(task)
 
             all_results = []
             sources_counts: Dict[str, int] = {}
@@ -273,7 +311,7 @@ async def api_search_stream(
             for coro in asyncio.as_completed(search_tasks):
                 name, res = await coro
                 all_results.extend(res)
-                sources_counts[name] = len(res)
+                sources_counts[name] = sources_counts.get(name, 0) + len(res)
 
             # GraphCrawler scoring
             from core.search_engine import GraphCrawler
@@ -285,18 +323,29 @@ async def api_search_stream(
             event_queue.put_nowait(("node_status_update", {
                 "nodeId": "source_discovery",
                 "status": "success" if total else "failed",
-                "label": f"Discovered {total} unique sources from {len(sources_counts)} engines",
+                "label": f"Discovered {total} unique sources across {len(subqueries)} query branches",
                 "metadata": {"total": total, "sources": sources_counts},
             }))
             event_queue.put_nowait(("progress", {
                 "status": "search_done",
                 "count": total,
                 "sources": sources_counts,
-                "message": f"🔍 {total} نتيجة فريدة",
+                "message": f"🔍 {total} نتيجة فريدة من {len(subqueries)} تفريعات",
             }))
 
             if not all_results:
                 event_queue.put_nowait(("progress", {"status": "empty", "message": "⚠️ لم تُعثر على نتائج."}))
+                empty_report = {
+                    "query": q,
+                    "results": [],
+                    "total_results": 0,
+                    "categories": {},
+                    "analysis": {
+                        "summary": "لم يتم العثور على أي نتائج بحث لهذا الاستعلام.",
+                        "keywords": [],
+                    },
+                }
+                event_queue.put_nowait(("complete", empty_report))
                 return
 
             # ── STAGE 2: Extraction ──
@@ -309,30 +358,57 @@ async def api_search_stream(
             }))
 
             enriched = []
-            if deep:
+            if model == "fathom_max":
+                # Fathom Max (Abyss Engine): Deep recursive crawling with live link tracing
+                event_queue.put_nowait(("node_status_update", {
+                    "nodeId": "extraction",
+                    "status": "fetching",
+                    "label": "Abyss Engine: Running recursive multi-layered crawl...",
+                    "metadata": {"model": "fathom_max"}
+                }))
+
+                enriched = await engine.scraper.scrape_recursive(
+                    seeds=all_results,
+                    query=q,
+                    max_nodes=40,
+                    max_depth=3,
+                    concurrency=4,
+                    aggregator=engine.aggregator
+                )
+                
+                scraped_ok = sum(1 for r in enriched if r.metadata.get("scraped"))
+                event_queue.put_nowait(("node_status_update", {
+                    "nodeId": "extraction",
+                    "status": "success" if scraped_ok else "failed",
+                    "label": f"Recursive crawl scraped {scraped_ok} pages successfully",
+                    "metadata": {"ok": scraped_ok, "total": len(enriched)}
+                }))
+            else:
+                # Fathom S1 (Lightning Engine): Highly concurrent shallow crawling
                 to_scrape = sorted(all_results, key=lambda r: r.relevance_score, reverse=True)[:15]
                 event_queue.put_nowait(("node_status_update", {
                     "nodeId": "extraction",
                     "status": "fetching",
-                    "label": f"Scraping {len(to_scrape)} pages...",
-                    "metadata": {"total": len(to_scrape)},
+                    "label": f"Lightning Engine: Scraping {len(to_scrape)} pages concurrently...",
+                    "metadata": {"model": "fathom_s1"}
                 }))
 
                 async def scrape_one(res):
                     from urllib.parse import urlparse as _up
                     domain = _up(res.url).netloc or res.url
-                    nid = f"scrape_{domain}"
+                    nid = engine.scraper._get_node_id(res.url)
+                    parent_id = res.metadata.get("discovery_node", "extraction") if res.metadata else "extraction"
                     event_queue.put_nowait(("tree_node", {
                         "nodeId": nid,
                         "stage": "extraction",
                         "status": "pending",
                         "label": domain,
-                        "parentId": "extraction",
+                        "parentId": parent_id,
                     }))
                     try:
                         scraped = await asyncio.wait_for(
                             engine.scraper.scrape_url(res.url, fallback_snippet=res.snippet),
-                            timeout=12.0
+                            timeout=6.0
                         )
                         if scraped and scraped.get("content"):
                             res.content = scraped["content"]
@@ -354,19 +430,26 @@ async def api_search_stream(
                                 "nodeId": nid,
                                 "status": "failed",
                                 "label": f"Extraction failed — {domain}",
-                                "metadata": {"can_retry": True},
                             }))
                     except Exception:
                         event_queue.put_nowait(("node_status_update", {
                             "nodeId": nid, "status": "failed",
                             "label": f"Timeout — {domain}",
-                            "metadata": {"can_retry": True},
                         }))
                     return res
 
                 scrape_tasks = [asyncio.create_task(scrape_one(r)) for r in to_scrape]
                 for coro in asyncio.as_completed(scrape_tasks):
-                    enriched.append(await coro)
+                    res = await coro
+                    enriched.append(res)
+                    # State Hydration for S1
+                    try:
+                        scraped_so_far = [r for r in enriched if r.metadata.get("scraped")]
+                        if scraped_so_far:
+                            report = await engine.aggregator.aggregate(scraped_so_far, q, final_analysis=False)
+                            event_queue.put_nowait(("partial_results", report))
+                    except Exception as ae:
+                        print(f"[Hydration S1 Error] {ae}")
 
                 scraped_ok = sum(1 for r in enriched if r.metadata.get("scraped"))
                 event_queue.put_nowait(("node_status_update", {
@@ -374,12 +457,6 @@ async def api_search_stream(
                     "status": "success" if scraped_ok else "failed",
                     "label": f"Extracted {scraped_ok}/{len(to_scrape)} pages",
                     "metadata": {"ok": scraped_ok, "total": len(to_scrape)},
-                }))
-            else:
-                enriched = all_results
-                event_queue.put_nowait(("node_status_update", {
-                    "nodeId": "extraction", "status": "success",
-                    "label": "Snippet-only mode (deep=false)",
                 }))
 
             # ── STAGE 3: Semantic Analysis ──
@@ -392,7 +469,8 @@ async def api_search_stream(
             }))
             event_queue.put_nowait(("progress", {"status": "analyzing", "message": "🧠 تحليل النصوص..."}))
 
-            final_report = await engine.aggregator.aggregate(enriched, q)
+            # Final Aggregation with complete AI Summary report
+            final_report = await engine.aggregator.aggregate(enriched, q, final_analysis=True)
             await engine.close()
             engine = None
 
@@ -418,7 +496,7 @@ async def api_search_stream(
             response_data = {
                 "status": "success",
                 "query": q,
-                "deep_search": deep,
+                "deep_search": model == "fathom_max",
                 "timestamp": datetime.now().isoformat(),
                 "data": final_report,
                 "pagination": {"page": 1, "total": final_report.get("total_results", 0), "per_page": 20},

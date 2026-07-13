@@ -311,6 +311,13 @@ class DeepScraper:
         self._cb = _circuit_breaker
         self._proxy = _proxy_rotator
 
+    def _get_node_id(self, url: str) -> str:
+        from urllib.parse import urlparse
+        import hashlib
+        domain = urlparse(url).netloc or url
+        url_hash = hashlib.md5(url.encode('utf-8')).hexdigest()[:8]
+        return f"scrape_{domain}_{url_hash}"
+
     # ── Event emission ────────────────────────────────────────────
 
     def _emit(self, event_type: str, payload: Dict[str, Any]) -> None:
@@ -374,9 +381,10 @@ class DeepScraper:
         3. Exponential backoff + full jitter on failure
         4. Graceful fallback to fallback_snippet if circuit is OPEN
         """
+        nid = self._get_node_id(url)
         if not self._is_safe_url(url):
             self._emit("node_status_update", {
-                "nodeId": f"scrape_{url[:40]}",
+                "nodeId": nid,
                 "status": "failed",
                 "label": "SSRF blocked — unsafe URL",
             })
@@ -388,7 +396,7 @@ class DeepScraper:
         # ── Circuit Breaker guard ──
         if not self._cb.is_allowed(domain):
             self._emit("node_status_update", {
-                "nodeId": f"scrape_{domain}",
+                "nodeId": nid,
                 "status": "rerouted",
                 "label": f"Circuit OPEN — using cached fallback for {domain}",
                 "metadata": {"cb_state": "open"},
@@ -403,7 +411,7 @@ class DeepScraper:
                 headers = _build_stealth_headers(url, is_wiki=(is_wiki or attempt > 1))
 
                 self._emit("node_status_update", {
-                    "nodeId": f"scrape_{domain}",
+                    "nodeId": nid,
                     "status": "fetching",
                     "label": f"Attempt {attempt + 1} — {domain}",
                     "metadata": {
@@ -432,7 +440,7 @@ class DeepScraper:
                                 if proxy:
                                     self._proxy.record_success(proxy)
                                 self._emit("node_status_update", {
-                                    "nodeId": f"scrape_{domain}",
+                                    "nodeId": nid,
                                     "status": "success",
                                     "label": f"Fetched {len(html):,} chars from {domain}",
                                 })
@@ -449,7 +457,7 @@ class DeepScraper:
 
                         elif resp.status == 403:
                             self._emit("node_status_update", {
-                                "nodeId": f"scrape_{domain}",
+                                "nodeId": nid,
                                 "status": "fetching",
                                 "label": "Bypassing Cloudflare — switching UA...",
                             })
@@ -460,7 +468,7 @@ class DeepScraper:
 
                         elif resp.status == 429:
                             self._emit("node_status_update", {
-                                "nodeId": f"scrape_{domain}",
+                                "nodeId": nid,
                                 "status": "fetching",
                                 "label": "Rate-limited — backing off...",
                             })
@@ -482,7 +490,7 @@ class DeepScraper:
                     err_msg = str(exc)
                     if "Access denied" in err_msg or "blocked" in err_msg:
                         self._emit("node_status_update", {
-                            "nodeId": f"scrape_{domain}",
+                            "nodeId": nid,
                             "status": "failed",
                             "label": f"SSRF guard blocked: {domain}",
                         })
@@ -500,7 +508,7 @@ class DeepScraper:
             cb_state = self._cb.domain_status(domain)
 
             self._emit("node_status_update", {
-                "nodeId": f"scrape_{domain}",
+                "nodeId": nid,
                 "status": "failed" if cb_state != "open" else "rerouted",
                 "label": (
                     f"Circuit OPEN — {domain} quarantined for 45s"
@@ -617,9 +625,10 @@ class DeepScraper:
                          fallback_snippet: str = "") -> Optional[Dict[str, Any]]:
         """Scrape a single URL — returns extracted content dict or None."""
         domain = urlparse(url).netloc or url
+        nid = self._get_node_id(url)
 
         self._emit("tree_node", {
-            "nodeId": f"scrape_{domain}",
+            "nodeId": nid,
             "stage": "extraction",
             "status": "pending",
             "label": domain,
@@ -631,14 +640,15 @@ class DeepScraper:
             return None
 
         self._emit("node_status_update", {
-            "nodeId": f"scrape_{domain}",
+            "nodeId": nid,
             "status": "processing",
             "label": "Extracting metadata...",
         })
 
-        extracted = self.extract_content_trafilatura(html, url)
+        # Offload CPU-bound text extraction to background threads
+        extracted = await asyncio.to_thread(self.extract_content_trafilatura, html, url)
         if not extracted.get("content"):
-            extracted = self.extract_content_bs4(html, url)
+            extracted = await asyncio.to_thread(self.extract_content_bs4, html, url)
 
         if extracted.get("content"):
             extracted["url"] = url
@@ -646,6 +656,25 @@ class DeepScraper:
             extracted["word_count"] = len(extracted["content"].split())
             extracted["scrape_timestamp"] = datetime.now().isoformat()
             extracted["cb_state"] = self._cb.domain_status(domain)
+
+            # Extract links in a background thread
+            def get_links():
+                from bs4 import BeautifulSoup
+                links = []
+                try:
+                    soup = BeautifulSoup(html, "html.parser")
+                    for a in soup.find_all("a", href=True):
+                        full = urljoin(url, a["href"])
+                        p = urlparse(full)
+                        if (p.scheme in ("http", "https")
+                                and not any(ext in p.path.lower()
+                                            for ext in [".jpg", ".png", ".pdf", ".zip", ".mp4", ".gif", ".jpeg", ".svg", ".png", ".webp"])):
+                            links.append(full.split('#')[0])
+                except Exception:
+                    pass
+                return list(set(links))
+
+            extracted["links"] = await asyncio.to_thread(get_links)
 
             try:
                 hostname = urlparse(url).hostname
@@ -656,7 +685,7 @@ class DeepScraper:
                 extracted["resolved_ip"] = ""
 
             self._emit("node_status_update", {
-                "nodeId": f"scrape_{domain}",
+                "nodeId": nid,
                 "status": "success",
                 "label": f"Extracted {extracted['word_count']:,} words",
                 "metadata": {
@@ -693,6 +722,146 @@ class DeepScraper:
             enriched.append(result)
 
         return enriched
+
+    async def scrape_recursive(
+        self,
+        seeds: List[SearchResult],
+        query: str,
+        max_nodes: int = 40,
+        max_depth: int = 3,
+        concurrency: int = 5,
+        aggregator = None,
+    ) -> List[SearchResult]:
+        """
+        Recursively trace hyperlinks up to max_depth,
+        concurrently fetching pages and emitting dynamic nodes to the Live Tree.
+        Bypasses rate limits using randomized jittered exponential backoffs,
+        and incrementally yields results to the client (state hydration).
+        """
+        import hashlib
+        from urllib.parse import urlparse
+        
+        def get_node_id(u: str) -> str:
+            return "n_" + hashlib.md5(u.encode('utf-8')).hexdigest()[:8]
+
+        visited_urls = set()
+        crawled_results: List[SearchResult] = []
+        queued_urls = set()
+
+        queue = asyncio.Queue()
+        
+        for idx, r in enumerate(seeds):
+            norm = r.url.lower().rstrip('/')
+            visited_urls.add(norm)
+            queued_urls.add(norm)
+            # Use the discovery node from metadata if available, else extraction
+            parent_id = r.metadata.get("discovery_node", "extraction") if r.metadata else "extraction"
+            await queue.put((r.url, 1, parent_id, r))
+
+
+        async def worker():
+            while True:
+                try:
+                    url, depth, parent_node_id, res_obj = await queue.get()
+                except asyncio.CancelledError:
+                    break
+                
+                if len(crawled_results) >= max_nodes:
+                    queue.task_done()
+                    continue
+
+                node_id = get_node_id(url)
+                domain = urlparse(url).netloc or url
+                
+                self._emit("tree_node", {
+                    "nodeId": node_id,
+                    "stage": "extraction",
+                    "status": "pending",
+                    "label": f"[{depth}] {domain}",
+                    "parentId": parent_node_id,
+                    "metadata": {"depth": depth}
+                })
+
+                self._emit("node_status_update", {
+                    "nodeId": node_id,
+                    "status": "fetching",
+                    "label": f"Scanning Layer {depth}...",
+                    "metadata": {"depth": depth}
+                })
+
+                scraped = None
+                try:
+                    scraped = await self.scrape_url(url, fallback_snippet=res_obj.snippet)
+                except Exception as e:
+                    self._emit("node_status_update", {
+                        "nodeId": node_id,
+                        "status": "failed",
+                        "label": f"Error: {str(e)[:40]}"
+                    })
+
+                if scraped and scraped.get("content"):
+                    res_obj.content = scraped["content"]
+                    res_obj.metadata.update({
+                        "scraped": True,
+                        "word_count": scraped.get("word_count", 0),
+                        "extraction_method": scraped.get("extraction_method", "trafilatura"),
+                        "resolved_ip": scraped.get("resolved_ip", ""),
+                        "cb_state": scraped.get("cb_state", "closed"),
+                        "parent_url": res_obj.metadata.get("parent_url", ""),
+                        "depth": depth
+                    })
+                    crawled_results.append(res_obj)
+
+                    self._emit("node_status_update", {
+                        "nodeId": node_id,
+                        "status": "success",
+                        "label": f"Extracted {scraped.get('word_count', 0):,} words",
+                        "metadata": res_obj.metadata
+                    })
+
+                    # State Hydration update
+                    if aggregator:
+                        try:
+                            report = await aggregator.aggregate(crawled_results.copy(), query, final_analysis=False)
+                            self._emit("partial_results", report)
+                        except Exception as ae:
+                            print(f"[Hydration Error] {ae}")
+
+                    if depth < max_depth and len(crawled_results) < max_nodes:
+                        links = scraped.get("links", [])
+                        random.shuffle(links)
+                        enqueued = 0
+                        for link in links:
+                            if enqueued >= 3:
+                                break
+                            link_norm = link.lower().rstrip('/')
+                            if link_norm not in queued_urls:
+                                queued_urls.add(link_norm)
+                                child_res = SearchResult(
+                                    title=f"Subpage of {domain}",
+                                    url=link,
+                                    snippet=f"Discovered via link trace on {domain}",
+                                    source="link_trace",
+                                    relevance_score=res_obj.relevance_score * 0.8
+                                )
+                                child_res.metadata["parent_url"] = url
+                                await queue.put((link, depth + 1, node_id, child_res))
+                                enqueued += 1
+                else:
+                    self._emit("node_status_update", {
+                        "nodeId": node_id,
+                        "status": "failed",
+                        "label": f"Extraction failed"
+                    })
+                
+                queue.task_done()
+
+        tasks = [asyncio.create_task(worker()) for _ in range(concurrency)]
+        await queue.join()
+        for t in tasks:
+            t.cancel()
+
+        return crawled_results
 
     async def deep_scrape(self, url: str, max_depth: int = 2) -> Dict[str, Any]:
         """Recursively scrape a URL and its internal links (bounded depth)."""
