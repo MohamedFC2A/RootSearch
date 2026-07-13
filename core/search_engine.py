@@ -807,6 +807,62 @@ class SearchEngine:
                 if isinstance(res, list):
                     all_results.extend(res)
 
+        # ── Fallback Search if all engines returned 0 results ──
+        if not all_results:
+            self._emit("tree_node", {
+                "nodeId": "engine_reader_search",
+                "stage": "source_discovery",
+                "status": "fetching",
+                "label": "All standard engines failed. Using secondary search network...",
+                "parentId": "source_discovery",
+            })
+            try:
+                jina_search_url = f"https://s.jina.ai/{urllib.parse.quote(query)}"
+                headers = {
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                    "Accept": "application/json"
+                }
+                session = await self._get_session()
+                async with session.get(jina_search_url, headers=headers, timeout=aiohttp.ClientTimeout(total=8.0)) as resp:
+                    if resp.status == 200:
+                        try:
+                            # Try parsing as JSON first
+                            data = await resp.json()
+                            items = data if isinstance(data, list) else data.get("data", [])
+                            for idx, item in enumerate(items):
+                                all_results.append(SearchResult(
+                                    title=item.get("title", f"Result {idx+1}"),
+                                    url=item.get("url", ""),
+                                    snippet=item.get("description", item.get("snippet", "")),
+                                    source="reader_search",
+                                ))
+                        except Exception:
+                            # Fallback to parsing text/markdown if not JSON
+                            text = await resp.text()
+                            matches = re.findall(r'\[([^\]]+)\]\((https?://[^\)]+)\)\n*([^\[\n]+)?', text)
+                            for match in matches:
+                                title, url, snippet = match
+                                all_results.append(SearchResult(
+                                    title=title.strip(),
+                                    url=url.strip(),
+                                    snippet=(snippet or "").strip(),
+                                    source="reader_search",
+                                ))
+                
+                status_label = f"Secondary search: {len(all_results)} results" if all_results else "Secondary search: no results"
+                self._emit("node_status_update", {
+                    "nodeId": "engine_reader_search",
+                    "status": "success" if all_results else "failed",
+                    "label": status_label,
+                    "metadata": {"count": len(all_results)},
+                })
+            except Exception as e:
+                self._emit("node_status_update", {
+                    "nodeId": "engine_reader_search",
+                    "status": "failed",
+                    "label": f"Secondary search failed: {type(e).__name__}",
+                })
+
         # ── GraphCrawler semantic prioritisation ──
         crawler = GraphCrawler(query=query, max_nodes=120, on_event=self._on_event)
         prioritised = crawler.prioritise(all_results)

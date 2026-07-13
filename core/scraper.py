@@ -503,6 +503,32 @@ class DeepScraper:
                     delay = _backoff_delay(attempt, base=1.0, cap=10.0)
                     await asyncio.sleep(delay)
 
+            # Direct scraping failed — fallback to Jina Reader Network as a smart, fast backup!
+            try:
+                self._emit("node_status_update", {
+                    "nodeId": nid,
+                    "status": "fetching",
+                    "label": f"Direct fetch failed — retrying via Reader Network...",
+                })
+                jina_url = f"https://r.jina.ai/{url}"
+                headers = {
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                    "X-No-Cache": "true"
+                }
+                async with session.get(jina_url, headers=headers, timeout=aiohttp.ClientTimeout(total=8.0)) as resp:
+                    if resp.status == 200:
+                        text_data = await resp.text(errors="replace")
+                        if text_data and len(text_data) > 100:
+                            self._cb.record_success(domain)
+                            self._emit("node_status_update", {
+                                "nodeId": nid,
+                                "status": "success",
+                                "label": f"Fetched {len(text_data):,} chars via Reader Network",
+                            })
+                            return text_data
+            except Exception:
+                pass
+
             # All attempts exhausted — record failure
             self._cb.record_failure(domain)
             cb_state = self._cb.domain_status(domain)

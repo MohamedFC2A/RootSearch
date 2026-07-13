@@ -40,6 +40,9 @@ class SearchConfig:
         "duckduckgo",
         "searx",
         "wikipedia",
+        "google",
+        "bing",
+        "brave",
     ])
     
     # إعدادات الذكاء الاصطناعي
