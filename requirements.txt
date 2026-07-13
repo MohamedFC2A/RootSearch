@@ -28,4 +28,4 @@ aiofiles>=23.2.1
 orjson>=3.9.10
 httpx>=0.26.0
 fake-useragent>=1.4.0
-huggingface_hub>=0.20.0
+huggingface_hub>=0.20.0,<0.24.0
