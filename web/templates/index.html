@@ -48,9 +48,9 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=Cairo:wght@300;400;600;700&family=Space+Mono:wght@400;700&family=JetBrains+Mono:wght@400;500&family=Syncopate:wght@700&family=Space+Grotesk:wght@700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
-    <script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.0.6/purify.min.js"></script>
+    <script src="/static/vis-network.min.js"></script>
+    <script src="/static/marked.min.js"></script>
+    <script src="/static/purify.min.js"></script>
     <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
@@ -162,7 +162,7 @@
     <section class="results-section" id="resultsSection" style="display:none">
         <div class="results-topbar">
             <div class="results-meta">
-                <span class="results-count"><span id="resultsCount">0</span> نتيجة في <span id="searchTime">0.0</span>ث</span>
+                <span class="results-count">تم العثور على <span id="resultsCount">صفر</span> شيء في <span id="searchTime">0.0</span>ث</span>
                 <button class="new-search-btn" id="newSearchBtn" onclick="resetSearch()">
                     <i class="fas fa-redo-alt"></i> بحث جديد
                 </button>
@@ -171,6 +171,20 @@
                 <button class="action-icon-btn" onclick="exportAsJSON()" title="تصدير JSON"><i class="fas fa-file-code"></i></button>
                 <button class="action-icon-btn" onclick="exportAsText()" title="تصدير نص"><i class="fas fa-file-alt"></i></button>
                 <button class="action-icon-btn" onclick="exportAsHTMLReport()" title="حفظ الشبكة"><i class="fas fa-network-wired"></i></button>
+            </div>
+        </div>
+
+        <!-- AI QUICK OVERVIEW -->
+        <div class="ai-overview-capsule" id="aiOverviewCapsule" style="display:none;">
+            <div class="ai-overview-header">
+                <div class="ai-title-row">
+                    <i class="fas fa-sparkles ai-pulse-icon"></i>
+                    <h3>إجابة الذكاء الاصطناعي الفورية (RootSearch AI)</h3>
+                </div>
+                <span class="ai-badge">GLM-4 / Gemini</span>
+            </div>
+            <div class="ai-overview-body" id="aiOverviewBody">
+                <!-- Content injected by JS -->
             </div>
         </div>
 

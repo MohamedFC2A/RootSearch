@@ -78,7 +78,7 @@
   --touch-min: 48px;
 
   /* Z-index stack */
-  --z-base: 1;  --z-card: 10;  --z-float: 100;
+  --z-base: 1;  --z-card: 10;  --z-float: 100;  --z-dropdown: 150;
   --z-modal: 200;  --z-sheet: 300;  --z-toast: 400;
 }
 
@@ -532,7 +532,7 @@ kbd {
   overflow-x: auto; overflow-y: visible;
   -webkit-overflow-scrolling: touch;
   min-height: 300px;
-  touch-action: pan-x;
+  touch-action: pan-x pan-y;
 }
 
 .tree-canvas {
@@ -559,8 +559,16 @@ kbd {
 }
 .connector-line {
   width: 100%; height: 2px;
-  border-top: 1.5px dashed rgba(74, 108, 247, 0.4);
+  background-image: linear-gradient(90deg, rgba(74, 108, 247, 0.5) 50%, transparent 50%);
+  background-size: 10px 2px;
+  background-repeat: repeat-x;
   position: relative;
+  animation: flowHorizontal 0.8s linear infinite;
+}
+
+@keyframes flowHorizontal {
+  from { background-position: 0 0; }
+  to { background-position: -20px 0; }
 }
 .connector-line::after {
   content: "";
@@ -1153,12 +1161,13 @@ kbd {
 }
 
 /* ─── SCROLLBAR ──────────────────────────────────────────────── */
-::-webkit-scrollbar { width: 6px; height: 6px; }
-::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: rgba(255, 255, 255, 0.02); }
 ::-webkit-scrollbar-thumb {
-  background: var(--border-mid); border-radius: 3px;
+  background: var(--border-strong); border-radius: 5px;
+  border: 2px solid var(--bg-surface);
 }
-::-webkit-scrollbar-thumb:hover { background: var(--border-strong); }
+::-webkit-scrollbar-thumb:hover { background: var(--accent); }
 
 /* ─── MOBILE RESPONSIVE ──────────────────────────────────────── */
 @media (max-width: 768px) {
@@ -1204,8 +1213,17 @@ kbd {
     width: 2px !important;
     height: 100% !important;
     border-top: none !important;
-    border-left: 1.5px dashed rgba(74, 108, 247, 0.4) !important;
+    border-left: none !important;
+    background-image: linear-gradient(180deg, rgba(74, 108, 247, 0.5) 50%, transparent 50%) !important;
+    background-size: 2px 10px !important;
+    background-repeat: repeat-y !important;
     margin: 0 auto;
+    animation: flowVertical 0.8s linear infinite !important;
+  }
+
+  @keyframes flowVertical {
+    from { background-position: 0 0; }
+    to { background-position: 0 -20px; }
   }
   .connector-line::after {
     left: 50% !important;
@@ -1700,4 +1718,83 @@ kbd {
   0% { background-position: 200% 0; }
   100% { background-position: -200% 0; }
 }
+
+/* ─── AI INTEGRATION PREMIUM STYLES ─── */
+.ai-overview-capsule {
+  background: rgba(17, 24, 39, 0.65);
+  border: 1px solid rgba(139, 92, 246, 0.2);
+  border-radius: var(--r-lg);
+  padding: var(--sp-5);
+  margin-bottom: var(--sp-6);
+  box-shadow: 0 4px 30px rgba(139, 92, 246, 0.05);
+  backdrop-filter: blur(10px);
+  transition: border-color var(--t-normal), box-shadow var(--t-normal);
+}
+.ai-overview-capsule:hover {
+  border-color: rgba(139, 92, 246, 0.45);
+  box-shadow: 0 4px 30px rgba(139, 92, 246, 0.1);
+}
+.ai-overview-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: var(--sp-4);
+  border-bottom: 1px solid var(--border);
+  padding-bottom: var(--sp-3);
+}
+.ai-title-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  color: #A78BFA;
+}
+.ai-title-row h3 {
+  font-size: var(--text-base);
+  font-weight: 700;
+  margin: 0;
+}
+.ai-pulse-icon {
+  animation: ai-pulse 2s infinite;
+}
+@keyframes ai-pulse {
+  0% { transform: scale(1); opacity: 0.8; }
+  50% { transform: scale(1.15); opacity: 1; }
+  100% { transform: scale(1); opacity: 0.8; }
+}
+.ai-badge {
+  font-size: 10px;
+  font-family: var(--font-code);
+  background: rgba(139, 92, 246, 0.15);
+  color: #C084FC;
+  padding: 2px 8px;
+  border-radius: 12px;
+  border: 1px solid rgba(139, 92, 246, 0.3);
+}
+.ai-overview-body {
+  font-size: var(--text-base);
+  color: var(--text-primary);
+  line-height: 1.7;
+}
+.ai-overview-body p {
+  margin-bottom: var(--sp-3);
+}
+.ai-overview-body ul, .ai-overview-body ol {
+  margin-inline-start: var(--sp-5);
+  margin-bottom: var(--sp-3);
+}
+
+.ai-summary-badge {
+  color: #A78BFA;
+  font-weight: 600;
+  font-size: var(--text-xs);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-inline-end: 6px;
+  background: rgba(139, 92, 246, 0.08);
+  padding: 2px 6px;
+  border-radius: 4px;
+  border: 1px solid rgba(139, 92, 246, 0.15);
+}
+
 

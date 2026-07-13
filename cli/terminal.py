@@ -148,7 +148,7 @@ def display_analysis_report(analysis: Dict[str, Any]):
     # 2. الكلمات المفتاحية
     if analysis.get('keywords'):
         print(f"\n🏷️  {color_text('أهم الكلمات المفتاحية المستخلصة:', CLR_CYAN, bold=True)}")
-        kws = [color_text(k, CLR_YELLOW) for k in analysis['keywords'][:15]]
+        kws = [color_text(k if isinstance(k, str) else k.get('word', ''), CLR_YELLOW) for k in analysis['keywords'][:15]]
         print("  " + " | ".join(kws))
         
     # 3. تحليل المشاعر

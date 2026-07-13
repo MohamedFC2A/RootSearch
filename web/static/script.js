@@ -198,6 +198,10 @@ function handleSearch(e) {
     resultsSection.style.display = '';
     document.body.classList.add('results-active');
 
+    // Hide AI Quick Overview
+    const aiOverview = document.getElementById('aiOverviewCapsule');
+    if (aiOverview) aiOverview.style.display = 'none';
+
     // Set button and progress bar
     setSearchButtonLoading(true);
     showProgressBar();
@@ -234,6 +238,63 @@ const STAGE_LABELS = {
     failed:     'فشلت العملية',
     rerouted:   'تم تغيير المسار',
 };
+
+
+function formatScaryCount(n) {
+    if (n === undefined || n === null) return 'صفر';
+    const num = parseInt(n, 10);
+    if (isNaN(num) || num <= 0) return 'صفر';
+
+    const ones = ['', 'واحد', 'اثنان', 'ثلاثة', 'أربعة', 'خمسة', 'ستة', 'سبعة', 'ثمانية', 'تسعة', 'عشرة', 'أحد عشر', 'اثنا عشر', 'ثلاثة عشر', 'أربعة عشر', 'خمسة عشر', 'ستة عشر', 'سبعة عشر', 'ثمانية عشر', 'تسعة عشر'];
+    const tens = ['', '', 'عشرون', 'ثلاثون', 'أربعون', 'خمسون', 'ستون', 'سبعون', 'ثمانون', 'تسعون'];
+    const hundreds = ['', 'مائة', 'مائتان', 'ثلاثمائة', 'أربعمائة', 'خمسمائة', 'ستمائة', 'سبعمائة', 'ثمانمائة', 'تسعمائة'];
+
+    function toWords(val) {
+        if (val === 0) return '';
+        if (val < 20) return ones[val];
+        if (val < 100) {
+            const unit = val % 10;
+            const ten = Math.floor(val / 10);
+            return (unit === 0 ? '' : ones[unit] + ' و ') + tens[ten];
+        }
+        if (val < 1000) {
+            const hundred = Math.floor(val / 100);
+            const remainder = val % 100;
+            return hundreds[hundred] + (remainder === 0 ? '' : ' و ' + toWords(remainder));
+        }
+        return val.toString();
+    }
+
+    if (num === 1) {
+        return 'ألف';
+    } else if (num === 2) {
+        return 'مليون';
+    } else if (num === 3) {
+        return 'مليار';
+    } else if (num === 4) {
+        return 'ترليون';
+    } else if (num === 5) {
+        return 'بليون';
+    } else if (num >= 6 && num <= 10) {
+        return toWords(num) + ' مليارات';
+    } else {
+        return toWords(num) + ' مليار';
+    }
+}
+
+function scrollTreeToActiveStage(stage) {
+    const wrap = document.getElementById('treeCanvasWrap');
+    if (!wrap) return;
+    const col = document.getElementById(`col_${stage}`);
+    if (!col) return;
+    
+    const isMobile = window.innerWidth <= 768;
+    if (isMobile) {
+        col.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    } else {
+        col.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+    }
+}
 
 
 function resetLiveTree() {
@@ -278,6 +339,9 @@ function createTreeNode(nodeId, stage, status, label, metadata, parentId) {
     node.dataset.nodeId = nodeId;
     node.dataset.status = status;
     node.dataset.stage = stage;
+    if (status === 'failed') {
+        node.style.display = 'none';
+    }
 
     const initialMicro = status === 'pending' ? 'جاري التجهيز للعملية...' : '—';
     node.innerHTML = `
@@ -296,6 +360,7 @@ function createTreeNode(nodeId, stage, status, label, metadata, parentId) {
     treeNodes.set(nodeId, node);
 
     activateStageHeader(stage);
+    scrollTreeToActiveStage(stage);
     return node;
 }
 
@@ -304,6 +369,11 @@ function updateTreeNode(nodeId, status, label, metadata, parentId) {
     if (!node) return;
 
     node.dataset.status = status;
+    if (status === 'failed') {
+        node.style.display = 'none';
+    } else {
+        node.style.display = '';
+    }
 
     const statusTag = node.querySelector('.node-status-tag');
     if (statusTag) statusTag.textContent = STAGE_LABELS[status] || status;
@@ -321,7 +391,7 @@ function updateTreeNode(nodeId, status, label, metadata, parentId) {
         } else if (metadata) {
             const parts = [];
             if (metadata.words)   parts.push(`${metadata.words.toLocaleString()} كلمة`);
-            if (metadata.count !== undefined) parts.push(`${metadata.count} نتيجة`);
+            if (metadata.count !== undefined) parts.push(`تم العثور على ${formatScaryCount(metadata.count)} شيء`);
             if (metadata.method)  parts.push(metadata.method);
             if (metadata.cb_state && metadata.cb_state !== 'closed') parts.push(`CB: ${metadata.cb_state}`);
             micro.textContent = parts.join(' · ') || '—';
@@ -349,6 +419,11 @@ function updateTreeNode(nodeId, status, label, metadata, parentId) {
     if (status === 'success' || status === 'done') {
         const stageHeader = document.querySelector(`.stage-header-item[data-stage="${node.dataset.stage}"]`);
         if (stageHeader) stageHeader.classList.add('done');
+    }
+
+    // Smooth scroll to this node's stage
+    if (node.dataset.stage) {
+        scrollTreeToActiveStage(node.dataset.stage);
     }
 }
 
@@ -485,7 +560,7 @@ function startSSEStream(query, model) {
             const d = JSON.parse(e.data);
             if (d.message) document.getElementById('treeStatus').textContent = d.message;
             if (d.status === 'search_done' && d.count !== undefined) {
-                document.getElementById('resultsCount').textContent = d.count;
+                document.getElementById('resultsCount').textContent = formatScaryCount(d.count);
             }
         } catch (_) {}
     });
@@ -496,11 +571,19 @@ function startSSEStream(query, model) {
             const report = JSON.parse(e.data);
             currentSearchData = report;
 
+            // Populate AI Quick Overview at top of results
+            const aiOverview = document.getElementById('aiOverviewCapsule');
+            const aiOverviewBody = document.getElementById('aiOverviewBody');
+            if (aiOverview && aiOverviewBody && report.analysis?.summary) {
+                aiOverviewBody.innerHTML = DOMPurify.sanitize(marked.parse(report.analysis.summary));
+                aiOverview.style.display = 'block';
+            }
+
             const elapsed = ((Date.now() - searchStartTime) / 1000).toFixed(1);
             document.getElementById('searchTime').textContent = elapsed;
-            document.getElementById('resultsCount').textContent = report.total_results || 0;
+            document.getElementById('resultsCount').textContent = formatScaryCount(report.total_results || 0);
             document.getElementById('treeStatus').textContent =
-                `اكتمل البحث بنجاح — تم العثور على ${report.total_results || 0} نتيجة في ${elapsed} ثانية`;
+                `اكتمل البحث بنجاح — تم العثور على ${formatScaryCount(report.total_results || 0)} شيء في ${elapsed} ثانية`;
 
             // Mark verification node done
             updateTreeNode('verification', 'success', 'التقرير جاهز ✓', null);
@@ -511,7 +594,7 @@ function startSSEStream(query, model) {
             buildKnowledgeGraph(report);
 
             setStatusDot('idle', 'Done');
-            showToast(`تم العثور على ${report.total_results || 0} نتيجة`, 'success');
+            showToast(`تم العثور على ${formatScaryCount(report.total_results || 0)} شيء`, 'success');
             
             updateProgressBar(100);
             setTimeout(() => {
@@ -687,7 +770,11 @@ function resultCardHTML(r, idx) {
     const src = (r.source || '').split('|')[0];
     const wc = r.metadata?.word_count ? `${r.metadata.word_count.toLocaleString()} كلمة` : '';
     const scraped = r.metadata?.scraped ? '<i class="fas fa-check" style="color:var(--success-text)"></i> تم استخراجه' : '';
-    const snippetHighlighted = highlightTerms(escapeHtml(r.snippet || ''), currentQuery);
+    
+    // Use AI summary if available and different from snippet, else fallback to snippet
+    const isAISummary = r.summary && r.summary !== r.snippet && !r.summary.includes('Analysis failed');
+    const bodyText = isAISummary ? r.summary : (r.snippet || '');
+    const bodyHighlighted = highlightTerms(escapeHtml(bodyText), currentQuery);
 
     return `
     <article class="result-card" data-category="${r.content_type || 'other'}">
@@ -701,7 +788,10 @@ function resultCardHTML(r, idx) {
             </a>
         </h3>
         <div class="result-url">${escapeHtml(r.url || '')}</div>
-        <p class="result-snippet">${snippetHighlighted}</p>
+        <p class="result-snippet">
+            ${isAISummary ? `<span class="ai-summary-badge"><i class="fas fa-sparkles"></i> تلخيص الذكاء الاصطناعي</span>` : ''}
+            ${bodyHighlighted}
+        </p>
         <div class="result-footer">
             ${wc ? `<span class="result-meta-tag"><i class="fas fa-file-word"></i> ${wc}</span>` : ''}
             ${scraped}
@@ -748,7 +838,17 @@ function filterByCategory(cat, btn) {
 // ─── KNOWLEDGE GRAPH ──────────────────────────────────────────
 function buildKnowledgeGraph(report) {
     const container = document.getElementById('knowledgeGraphCanvas');
-    if (!container || typeof vis === 'undefined') return;
+    if (!container) return;
+    if (typeof vis === 'undefined') {
+        container.innerHTML = `
+            <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;color:var(--text-muted);padding:20px;text-align:center">
+                <i class="fas fa-exclamation-triangle" style="font-size:24px;color:#f59e0b;margin-bottom:10px"></i>
+                <p style="font-size:14px;margin:0">لم يتم تحميل مكتبة رسم الشبكات (vis.js) بشكل صحيح.</p>
+                <p style="font-size:12px;margin:5px 0 0">يرجى التأكد من اتصال الإنترنت أو تحديث الصفحة لتحميلها محلياً.</p>
+            </div>
+        `;
+        return;
+    }
 
     if (visNetworkInstance) { visNetworkInstance.destroy(); visNetworkInstance = null; }
 
@@ -775,134 +875,142 @@ function buildKnowledgeGraph(report) {
 
     // 2. Iterate through results to build the branching tree
     results.forEach((r, i) => {
-        const id = getUrlId(r.url);
-        if (nodes.get(id)) return;
+        try {
+            const id = getUrlId(r.url);
+            if (nodes.get(id)) return;
 
-        const domain = (r.url || '').replace(/https?:\/\//, '').split('/')[0];
-        const isScraped = r.metadata?.scraped;
+            const domain = (r.url || '').replace(/https?:\/\//, '').split('/')[0];
+            const isScraped = r.metadata?.scraped;
 
-        // Add result node
-        nodes.add({
-            id,
-            label: escapeHtml(domain || r.title?.slice(0, 20) || `نتيجة ${i + 1}`),
-            shape: 'box',
-            color: {
-                background: isScraped ? '#05160e' : '#12151A',
-                border: isScraped ? '#10b981' : '#2E3344',
-                highlight: { background: isScraped ? '#05160e' : '#12151A', border: '#4a6cf7' }
-            },
-            font: { color: isScraped ? '#E2E6EF' : '#8892A4', size: 11, face: 'Cairo' },
-            margin: 8,
-            borderWidth: 1.5
-        });
+            // Add result node
+            nodes.add({
+                id,
+                label: escapeHtml(domain || r.title?.slice(0, 20) || `شيء ${i + 1}`),
+                shape: 'box',
+                color: {
+                    background: isScraped ? '#05160e' : '#12151A',
+                    border: isScraped ? '#10b981' : '#2E3344',
+                    highlight: { background: isScraped ? '#05160e' : '#12151A', border: '#4a6cf7' }
+                },
+                font: { color: isScraped ? '#E2E6EF' : '#8892A4', size: 11, face: 'Cairo' },
+                margin: 8,
+                borderWidth: 1.5
+            });
 
-        // Determine hierarchy lineage
-        let parentNodeId = 'query'; // default parent
+            // Determine hierarchy lineage
+            let parentNodeId = 'query'; // default parent
 
-        // Extract subquery and discovery metadata
-        const subqueryText = r.metadata?.subquery || report.query;
-        const subqueryIdx = r.metadata?.subquery_idx !== undefined ? r.metadata.subquery_idx : 0;
-        const subqueryNodeId = `sub_${subqueryIdx}`;
+            // Extract subquery and discovery metadata
+            const subqueryText = r.metadata?.subquery || report.query;
+            const subqueryIdx = r.metadata?.subquery_idx !== undefined ? r.metadata.subquery_idx : 0;
+            const subqueryNodeId = `sub_${subqueryIdx}`;
 
-        // Create Subquery node if not exists
-        if (subqueryText) {
-            if (!createdSubqueries.has(subqueryNodeId)) {
-                createdSubqueries.add(subqueryNodeId);
-                nodes.add({
-                    id: subqueryNodeId,
-                    label: escapeHtml(subqueryIdx === 0 ? `الأساسي: "${subqueryText}"` : `تفريعة: "${subqueryText}"`),
-                    shape: 'box',
-                    color: { background: '#13111c', border: '#8b5cf6' },
-                    font: { color: '#D6BCFA', size: 11, face: 'Cairo' },
-                    margin: 8,
-                    borderWidth: 1
-                });
-                // Connect Query -> Subquery
-                edges.add({
-                    from: 'query',
-                    to: subqueryNodeId,
-                    color: { color: '#4B5563' },
-                    width: 1.5
-                });
+            // Create Subquery node if not exists
+            if (subqueryText) {
+                if (!createdSubqueries.has(subqueryNodeId)) {
+                    createdSubqueries.add(subqueryNodeId);
+                    nodes.add({
+                        id: subqueryNodeId,
+                        label: escapeHtml(subqueryIdx === 0 ? `الأساسي: "${subqueryText}"` : `تفريعة: "${subqueryText}"`),
+                        shape: 'box',
+                        color: { background: '#13111c', border: '#8b5cf6' },
+                        font: { color: '#D6BCFA', size: 11, face: 'Cairo' },
+                        margin: 8,
+                        borderWidth: 1
+                    });
+                    // Connect Query -> Subquery
+                    edges.add({
+                        from: 'query',
+                        to: subqueryNodeId,
+                        color: { color: '#4B5563' },
+                        width: 1.5
+                    });
+                }
+                parentNodeId = subqueryNodeId;
             }
-            parentNodeId = subqueryNodeId;
-        }
 
-        // Create Engine node under subquery if discovery node exists
-        const discoveryNode = r.metadata?.discovery_node;
-        if (discoveryNode) {
-            const parts = discoveryNode.split('_');
-            const engineName = parts.length >= 3 ? parts.slice(2).join('_') : parts.join('_');
-            const engineNodeId = `eng_${subqueryNodeId}_${engineName}`;
+            // Create Engine node under subquery if discovery node exists
+            const discoveryNode = r.metadata?.discovery_node;
+            if (discoveryNode) {
+                const parts = discoveryNode.split('_');
+                const engineName = parts.length >= 3 ? parts.slice(2).join('_') : parts.join('_');
+                const engineNodeId = `eng_${subqueryNodeId}_${engineName}`;
 
-            if (!createdEngines.has(engineNodeId)) {
-                createdEngines.add(engineNodeId);
-                nodes.add({
-                    id: engineNodeId,
-                    label: escapeHtml(engineName.toUpperCase()),
-                    shape: 'ellipse',
-                    color: { background: '#0e172a', border: '#3b82f6' },
-                    font: { color: '#90CDF4', size: 10, face: 'Cairo' },
-                    borderWidth: 1
-                });
-                // Connect Subquery -> Engine
-                edges.add({
-                    from: subqueryNodeId,
-                    to: engineNodeId,
-                    color: { color: '#3A4256' },
-                    width: 1
-                });
+                if (!createdEngines.has(engineNodeId)) {
+                    createdEngines.add(engineNodeId);
+                    nodes.add({
+                        id: engineNodeId,
+                        label: escapeHtml(engineName.toUpperCase()),
+                        shape: 'ellipse',
+                        color: { background: '#0e172a', border: '#3b82f6' },
+                        font: { color: '#90CDF4', size: 10, face: 'Cairo' },
+                        borderWidth: 1
+                    });
+                    // Connect Subquery -> Engine
+                    edges.add({
+                        from: subqueryNodeId,
+                        to: engineNodeId,
+                        color: { color: '#3A4256' },
+                        width: 1
+                    });
+                }
+                parentNodeId = engineNodeId;
             }
-            parentNodeId = engineNodeId;
-        }
 
-        // Connect parent to result
-        // Wait! What if this result is a subpage (link trace) with parent_url?
-        if (r.metadata?.parent_url) {
-            const parentUrlId = getUrlId(r.metadata.parent_url);
-            // Connect Parent URL Node -> Child URL Node directly!
-            if (nodes.get(parentUrlId)) {
-                edges.add({
-                    from: parentUrlId,
-                    to: id,
-                    color: { color: '#10b981' }, // green for link traces
-                    width: 1.2,
-                    arrows: { to: { enabled: true, scaleFactor: 0.4 } }
-                });
-                return; // skip connecting to engine
+            // Connect parent to result
+            // Wait! What if this result is a subpage (link trace) with parent_url?
+            if (r.metadata?.parent_url) {
+                const parentUrlId = getUrlId(r.metadata.parent_url);
+                // Connect Parent URL Node -> Child URL Node directly!
+                if (nodes.get(parentUrlId)) {
+                    edges.add({
+                        from: parentUrlId,
+                        to: id,
+                        color: { color: '#10b981' }, // green for link traces
+                        width: 1.2,
+                        arrows: { to: { enabled: true, scaleFactor: 0.4 } }
+                    });
+                    return; // skip connecting to engine
+                }
             }
-        }
 
-        // Connect parent to result
-        edges.add({
-            from: parentNodeId,
-            to: id,
-            color: { color: '#2E3344' },
-            width: 1,
-            arrows: { to: { enabled: true, scaleFactor: 0.4 } }
-        });
+            // Connect parent to result
+            edges.add({
+                from: parentNodeId,
+                to: id,
+                color: { color: '#2E3344' },
+                width: 1,
+                arrows: { to: { enabled: true, scaleFactor: 0.4 } }
+            });
+        } catch (e) {
+            console.error("Error adding result node to graph:", e, r);
+        }
     });
 
     // 3. Connect Keywords as floating cloud connected to main query
     kws.forEach((kw, i) => {
-        const word = typeof kw === 'string' ? kw : (kw.word || '');
-        if (!word) return;
-        const id = `kw${i}`;
-        nodes.add({
-            id,
-            label: escapeHtml(word),
-            shape: 'ellipse',
-            color: { background: '#1A140A', border: '#f59e0b' },
-            font: { color: '#fbd38d', size: 9, face: 'Cairo' },
-            borderWidth: 1
-        });
-        edges.add({
-            from: 'query',
-            to: id,
-            color: { color: '#B7791F' },
-            dashes: true,
-            width: 0.8
-        });
+        try {
+            const word = typeof kw === 'string' ? kw : (kw.word || '');
+            if (!word) return;
+            const id = `kw${i}`;
+            nodes.add({
+                id,
+                label: escapeHtml(word),
+                shape: 'ellipse',
+                color: { background: '#1A140A', border: '#f59e0b' },
+                font: { color: '#fbd38d', size: 9, face: 'Cairo' },
+                borderWidth: 1
+            });
+            edges.add({
+                from: 'query',
+                to: id,
+                color: { color: '#B7791F' },
+                dashes: true,
+                width: 0.8
+            });
+        } catch (e) {
+            console.error("Error adding keyword node to graph:", e, kw);
+        }
     });
 
     const graphData = { nodes, edges };
@@ -928,7 +1036,7 @@ function buildKnowledgeGraph(report) {
         physics: {
             enabled: isGraphPhysicsEnabled,
             hierarchicalRepulsion: {
-                nodeSpacing: 120,
+                nodeDistance: 120,
                 centralGravity: 0.0,
                 springLength: 150,
                 damping: 0.09
@@ -1106,12 +1214,227 @@ function exportAsJSON() {
 
 function exportAsText() {
     if (!currentSearchData) { showToast('لا توجد نتائج للتصدير', 'error'); return; }
-    const lines = (currentSearchData.results || []).map((r, i) =>
-        `[${i+1}] ${r.title}\n${r.url}\n${r.snippet}\n`
-    );
-    const blob = new Blob([lines.join('\n---\n')], { type: 'text/plain' });
-    downloadBlob(blob, `rootsearch_${Date.now()}.txt`);
-    showToast('تم تصدير النص', 'success');
+    
+    const report = currentSearchData;
+    const analysis = report.analysis || {};
+    const stats = analysis.statistics || {};
+    const sentiment = analysis.sentiment_overview || {};
+    const keywords = analysis.keywords || analysis.top_keywords || [];
+    const results = report.results || [];
+    const categories = report.categories || {};
+    
+    let text = "";
+    
+    // Helpers for borders
+    const drawDoubleLine = (len = 90) => "═".repeat(len) + "\n";
+    const drawSingleLine = (len = 90) => "─".repeat(len) + "\n";
+    const drawBoldLine = (len = 90) => "━".repeat(len) + "\n";
+    const padText = (txt, len, char = ' ', padLeft = false) => {
+        const str = String(txt);
+        if (str.length >= len) return str;
+        const diff = len - str.length;
+        return padLeft ? char.repeat(diff) + str : str + char.repeat(diff);
+    };
+    
+    // ─── 1. ASCII BRAND HEADER ───
+    text += drawDoubleLine();
+    text += "  ██████╗  ██████╗  ██████╗ ████████╗███████╗███████╗ █████╗ ██████╗  ██████╗██╗  ██╗\n";
+    text += "  ██╔══██╗██╔═══██╗██╔═══██╗╚══██╔══╝██╔════╝██╔════╝██╔══██╗██╔══██╗██╔════╝██║  ██║\n";
+    text += "  ██████╔╝██║   ██║██║   ██║   ██║   ███████╗█████╗  ███████║██████╔╝██║     ███████║\n";
+    text += "  ██╔══██╗██║   ██║██║   ██║   ██║   ╚════██║██╔══╝  ██╔══██║██╔══██╗██║     ██╔══██║\n";
+    text += "  ██║  ██║╚██████╔╝╚██████╔╝   ██║   ███████║███████╗██║  ██║██║  ██║╚██████╗██║  ██║\n";
+    text += "  ╚═╝  ╚═╝ ╚═════╝  ╚═════╝    ╚═╝   ╚══════╝╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝╚═╝  ╚═╝\n";
+    text += drawDoubleLine();
+    text += "                  ROOTSEARCH v3.0 — تقرير البحث المعرفي والتحليل الشامل\n";
+    text += drawDoubleLine() + "\n";
+    
+    // ─── 2. TABLE OF CONTENTS ───
+    text += "┌" + "─".repeat(88) + "┐\n";
+    text += "│" + padText(" جَدْوَلُ المُحْتَوَيَاتِ (Table of Contents)", 88, ' ', false) + "│\n";
+    text += "├" + "─".repeat(88) + "┤\n";
+    text += "│  [١] البيانات المرجعية العامة ومؤشرات البحث .................................. [قسم ١]  │\n";
+    text += "│  [٢] التلخيص الشامل والتحليل التوليدي (الذكاء الاصطناعي) ....................... [قسم ٢]  │\n";
+    text += "│  [٣] تحليل المشاعر والنبرة والانفعالات الوجدانية ............................ [قسم ٣]  │\n";
+    text += "│  [٤] الجدول التحليلي الإحصائي للمفاهيم والكلمات المفتاحية .................... [قسم ٤]  │\n";
+    text += "│  [٥] المعجم السياقي والتوزيع الجغرافي للمفاهيم ............................... [قسم ٥]  │\n";
+    text += "│  [٦] هيكل التصنيف الشجري للمصادر المعرفية .................................... [قسم ٦]  │\n";
+    text += "│  [٧] المراجع والمصادر الكاملة بالتفصيل ...................................... [قسم ٧]  │\n";
+    text += "└" + "─".repeat(88) + "┘\n\n\n";
+    
+    // ─── SECTION 1: SEARCH METRICS ───
+    text += "╔" + "═".repeat(88) + "╗\n";
+    text += "║ [قسم ١] البيانات المرجعية العامة ومؤشرات البحث                                ║\n";
+    text += "╚" + "═".repeat(88) + "╝\n";
+    text += "┌" + "─".repeat(88) + "┐\n";
+    text += "│ " + padText(`الاستعلام الأساسي : "${report.query}"`, 86) + " │\n";
+    text += "│ " + padText(`تاريخ التحليل     : ${new Date(report.timestamp || Date.now()).toLocaleString('ar-EG')}`, 86) + " │\n";
+    text += "│ " + padText(`نموذج التنقيب     : ${report.model === 'fathom_max' ? 'Fathom Max (التنقيب العميق المتقدم)' : 'Fathom S1 (البحث البرقي السريع)'}`, 86) + " │\n";
+    text += "├" + "─".repeat(88) + "┤\n";
+    text += "│ " + padText(`إجمالي المصادر    : ${results.length} مصادر تم تتبعها`, 86) + " │\n";
+    text += "│ " + padText(`المحركات النشطة   : ${stats.engines_count || 1} محركات بحث`, 86) + " │\n";
+    text += "│ " + padText(`إجمالي الكلمات    : ${stats.total_words_analyzed || 0} كلمة تم تحليلها دلالياً`, 86) + " │\n";
+    text += "│ " + padText(`متوسط درجة الصلة  : ${stats.average_relevance ? (stats.average_relevance * 100).toFixed(1) + "%" : "—"}`, 86) + " │\n";
+    text += "└" + "─".repeat(88) + "┘\n\n\n";
+    
+    // ─── SECTION 2: AI SUMMARY ───
+    text += "╔" + "═".repeat(88) + "╗\n";
+    text += "║ [قسم ٢] التلخيص الشامل والتحليل التوليدي (الذكاء الاصطناعي)                     ║\n";
+    text += "╚" + "═".repeat(88) + "╝\n";
+    const summary = analysis.summary || analysis.executive_summary || "لا يوجد ملخص متاح لهذا البحث.";
+    text += summary.replace(/\r\n/g, '\n') + "\n\n\n";
+    
+    // ─── SECTION 3: SENTIMENT & EMOTIONS ───
+    if (sentiment && sentiment.overall) {
+        text += "╔" + "═".repeat(88) + "╗\n";
+        text += "║ [قسم ٣] تحليل المشاعر والنبرة والانفعالات الوجدانية                             ║\n";
+        text += "╚" + "═".repeat(88) + "╝\n";
+        text += "┌" + "─".repeat(88) + "┐\n";
+        text += "│ " + padText(`المشاعر السائدة في النصوص : ${sentiment.overall}`, 86) + " │\n";
+        
+        // Progress bar helper
+        const drawBar = (val, maxVal = 1.0) => {
+            const pct = Math.max(0, Math.min(100, Math.round((val / maxVal) * 100)));
+            const filled = Math.round(pct / 10);
+            return `[${"█".repeat(filled)}${"░".repeat(10 - filled)}] ${pct}%`;
+        };
+        
+        const obj = sentiment.objectivity ? (sentiment.objectivity * 100).toFixed(1) + "%" : "—";
+        const subj = sentiment.subjectivity ? (sentiment.subjectivity * 100).toFixed(1) + "%" : "—";
+        
+        text += "│ " + padText(`الدرجة التحليلية للموضوعية : ${obj} ${drawBar(sentiment.objectivity || 0)}`, 86) + " │\n";
+        text += "│ " + padText(`الدرجة التحليلية للذاتية   : ${subj} ${drawBar(sentiment.subjectivity || 0)}`, 86) + " │\n";
+        text += "├" + "─".repeat(88) + "┤\n";
+        text += "│ " + padText("توزيع النبرة والانفعالات الوجدانية المكتشفة في النصوص:", 86) + " │\n";
+        
+        const emotions = sentiment.emotions || {};
+        const emoAr = { trust: 'الثقة', anger: 'الغضب', fear: 'الخوف', joy: 'الفرح/الرضا', sadness: 'الحزن' };
+        for (const [em, name] of Object.entries(emoAr)) {
+            const val = emotions[em] || 0;
+            text += "│ " + padText(`  - ${name.padEnd(10)} : ${drawBar(val)}`, 86) + " │\n";
+        }
+        text += "└" + "─".repeat(88) + "┘\n\n\n";
+    }
+    
+    // ─── SECTION 4: KEYWORDS STATS TABLE ───
+    if (keywords && keywords.length > 0) {
+        text += "╔" + "═".repeat(88) + "╗\n";
+        text += "║ [قسم ٤] الجدول التحليلي الإحصائي للمفاهيم والكلمات المفتاحية                  ║\n";
+        text += "╚" + "═".repeat(88) + "╝\n";
+        
+        // Let's draw a beautiful structured grid table
+        // Headers: | الرقم | المفهوم / الكلمة | التكرار | الكثافة | المواقع الفريدة |
+        text += "┌" + "─".repeat(6) + "┬" + "─".repeat(28) + "┬" + "─".repeat(14) + "┬" + "─".repeat(14) + "┬" + "─".repeat(22) + "┐\n";
+        text += "│ " + padText("الرقم", 4) + " │ " + padText("المفهوم / الكلمة المفتاحية", 26) + " │ " + padText("التكرار العام", 12) + " │ " + padText("الكثافة الدلالية", 12) + " │ " + padText("المواقع الفريدة", 20) + " │\n";
+        text += "├" + "─".repeat(6) + "┼" + "─".repeat(28) + "┼" + "─".repeat(14) + "┼" + "─".repeat(14) + "┼" + "─".repeat(22) + "┤\n";
+        
+        keywords.forEach((kw, index) => {
+            const isObj = typeof kw === 'object';
+            const word = isObj ? kw.word : kw;
+            const freq = isObj ? String(kw.frequency || '—') : '—';
+            const sitesCount = isObj ? String(kw.sites_count || '—') : '—';
+            const density = isObj ? String(kw.density || '—') : '—';
+            
+            text += "│ " + padText(index + 1, 4) + " │ " + padText(word, 26) + " │ " + padText(freq, 12) + " │ " + padText(density, 12) + " │ " + padText(sitesCount, 20) + " │\n";
+        });
+        text += "└" + "─".repeat(6) + "┴" + "─".repeat(28) + "┴" + "─".repeat(14) + "┴" + "─".repeat(14) + "┴" + "─".repeat(22) + "┘\n\n\n";
+        
+        // ─── SECTION 5: KEYWORD CONTEXTS & DISTRIBUTION ───
+        text += "╔" + "═".repeat(88) + "╗\n";
+        text += "║ [قسم ٥] المعجم السياقي والتوزيع الجغرافي للمفاهيم                              ║\n";
+        text += "╚" + "═".repeat(88) + "╝\n";
+        
+        keywords.forEach((kw, index) => {
+            const isObj = typeof kw === 'object';
+            if (!isObj) return;
+            
+            text += "╔" + "═".repeat(86) + "╗\n";
+            text += `║ المفهوم المعرفي #${index + 1}: [ ${kw.word} ]\n`;
+            text += "╠" + "═".repeat(86) + "╣\n";
+            
+            if (kw.distribution && kw.distribution.length > 0) {
+                text += "  [📊 توزيع الكثافة والتكرار حسب النطاقات]:\n";
+                kw.distribution.slice(0, 6).forEach(d => {
+                    const dotLen = Math.max(2, 60 - d.site.length);
+                    text += `   • ${d.site} ${".".repeat(dotLen)} ${d.count} ظهور\n`;
+                });
+                text += "\n";
+            }
+            
+            if (kw.contexts && kw.contexts.length > 0) {
+                text += "  [💬 السياقات والاستخدامات الدلالية الحية]:\n";
+                kw.contexts.slice(0, 4).forEach(c => {
+                    text += `   └── " ... ${c.trim()} ... "\n`;
+                });
+            }
+            text += "╚" + "═".repeat(86) + "╝\n\n";
+        });
+        text += "\n";
+    }
+    
+    // ─── SECTION 6: CATEGORIES TREE ───
+    if (Object.keys(categories).length > 0) {
+        text += "╔" + "═".repeat(88) + "╗\n";
+        text += "║ [قسم ٦] هيكل التصنيف الشجري للمصادر المعرفية                                   ║\n";
+        text += "╚" + "═".repeat(88) + "╝\n\n";
+        
+        for (const [catName, catResults] of Object.entries(categories)) {
+            if (catResults && catResults.length > 0) {
+                text += ` 📁 [الفئة المعرفية: ${catName.toUpperCase()}] (${catResults.length} مصدر معرفي)\n`;
+                catResults.forEach((r, idx) => {
+                    const isLast = idx === catResults.length - 1;
+                    const branch = isLast ? "  └── " : "  ├── ";
+                    const subBranch = isLast ? "      " : "  │   ";
+                    text += `${branch}${r.title} [الموقع: ${r.source} | درجة الصلة: ${(r.relevance_score * 100).toFixed(0)}%]\n`;
+                    text += `${subBranch}🔗 الرابط: ${r.url}\n`;
+                });
+                text += "\n";
+            }
+        }
+        text += "\n\n";
+    }
+    
+    // ─── SECTION 7: DETAILED RESULTS LIST ───
+    if (results && results.length > 0) {
+        text += "╔" + "═".repeat(88) + "╗\n";
+        text += "║ [قسم ٧] المراجع والمصادر الكاملة بالتفصيل                                    ║\n";
+        text += "╚" + "═".repeat(88) + "╝\n";
+        
+        results.forEach((r, i) => {
+            text += "┌" + "─".repeat(88) + "┐\n";
+            text += "│ " + padText(`[المرجع #${i + 1}] العنوان: ${r.title.slice(0, 70)}`, 86) + " │\n";
+            text += "├" + "─".repeat(88) + "┤\n";
+            text += "│ " + padText(`🔗 الرابط: ${r.url}`, 86) + " │\n";
+            text += "│ " + padText(`📰 المصدر: ${r.source} | درجة المطابقة: ${(r.relevance_score * 100).toFixed(1)}%`, 86) + " │\n";
+            if (r.snippet) {
+                text += "├" + "─".repeat(88) + "┤\n";
+                // Wrap snippet text nicely inside the box
+                const snip = r.snippet.trim().replace(/\n/g, ' ');
+                const words = snip.split(' ');
+                let line = "";
+                words.forEach(w => {
+                    if ((line + w).length > 80) {
+                        text += "│ " + padText(`  ${line}`, 86) + " │\n";
+                        line = w + " ";
+                    } else {
+                        line += w + " ";
+                    }
+                });
+                if (line) {
+                    text += "│ " + padText(`  ${line}`, 86) + " │\n";
+                }
+            }
+            text += "└" + "─".repeat(88) + "┘\n\n";
+        });
+    }
+    
+    text += drawBoldLine(90);
+    text += "                     تم إصدار هذا التقرير الفائق الجودة بواسطة محرك ROOTSEARCH\n";
+    text += "                        Deep Cognitive Search & Analysis System — v3.0\n";
+    text += drawBoldLine(90);
+    
+    const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+    downloadBlob(blob, `rootsearch_master_report_${report.query.replace(/\s+/g, '_')}_${Date.now()}.txt`);
+    showToast('تم تصدير التقرير الاحترافي فائق التنظيم والجودة بنجاح', 'success');
 }
 
 function exportAsHTMLReport() {
@@ -1124,7 +1447,7 @@ function exportAsHTMLReport() {
         </div>`).join('');
     const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>RootSearch — ${escapeHtml(currentQuery)}</title>
         <style>body{font-family:Inter,sans-serif;background:#0B0D10;color:#E2E6EF;max-width:900px;margin:0 auto;padding:32px}a{color:#4A6CF7}</style>
-        </head><body><h1>RootSearch Report: ${escapeHtml(currentQuery)}</h1><p>${currentSearchData.total_results} نتيجة</p>${cards}</body></html>`;
+        </head><body><h1>RootSearch Report: ${escapeHtml(currentQuery)}</h1><p>تم العثور على ${formatScaryCount(currentSearchData.total_results || 0)} شيء</p>${cards}</body></html>`;
     const blob = new Blob([html], { type: 'text/html' });
     downloadBlob(blob, `rootsearch_${Date.now()}.html`);
     showToast('تم تصدير HTML', 'success');

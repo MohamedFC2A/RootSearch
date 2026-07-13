@@ -32,21 +32,70 @@ class AIAnalyzer:
                 return
             
             try:
+                # تهيئة Gemini دائماً إذا كان المفتاح متوفراً ليكون كخيار احتياطي (Fallback)
                 if config.gemini_api_key:
-                    import google.generativeai as genai
-                    genai.configure(api_key=config.gemini_api_key)
-                    # Use flash for fast text tasks
-                    self.gemini_model = genai.GenerativeModel('gemini-1.5-flash')
-                    self.nlp_initialized = True
-                    print("[✨] تم تفعيل Google Gemini API بنجاح للتحليل الخارق")
-                else:
-                    print("[⚠️] مفتاح Gemini API غير متوفر. سيتم استخدام التحليل التقليدي.")
-                    self.nlp_initialized = True
+                    try:
+                        import google.generativeai as genai
+                        genai.configure(api_key=config.gemini_api_key)
+                        self.gemini_model = genai.GenerativeModel('gemini-1.5-flash')
+                        print("[✨] تم تهيئة Google Gemini API بنجاح كخيار احتياطي/أساسي")
+                    except Exception as ge:
+                        print(f"[⚠️] تعذر تهيئة Gemini API: {ge}")
+
+                if config.llm_provider == "glm_colab":
+                    if config.glm_api_url:
+                        print(f"[✨] تم ربط خادم البحث بنموذج GLM المستضاف على Colab: {config.glm_api_url}")
+                    else:
+                        print("[⚠️] تم اختيار GLM Colab ولكن رابط GLM_API_URL غير متوفر في الإعدادات.")
+                
+                self.nlp_initialized = True
                     
             except Exception as e:
-                print(f"[⚠️] تعذر تهيئة Gemini API: {e}")
-                print("[ℹ️] سيتم استخدام التحليل التقليدي بدلاً من ذلك")
-                self.nlp_initialized = True  # نمنع إعادة المحاولة
+                print(f"[⚠️] تعذر تهيئة مزود الـ AI: {e}")
+                print("[ℹ️] سيتم استخدام التحليل التقليدي عند الحاجة")
+                self.nlp_initialized = True
+
+    async def _call_llm(self, prompt: str) -> Optional[str]:
+        """استدعاء نموذج اللغة المختار (GLM Colab أو Gemini) مع الرجوع التلقائي عند الفشل"""
+        # 1. محاولة استخدام GLM Colab أولاً إذا تم اختياره وتوفر الرابط
+        if config.llm_provider == "glm_colab" and config.glm_api_url:
+            try:
+                url = f"{config.glm_api_url.rstrip('/')}/v1/chat/completions"
+                headers = {"Content-Type": "application/json"}
+                if config.glm_api_key:
+                    headers["Authorization"] = f"Bearer {config.glm_api_key}"
+                
+                payload = {
+                    "model": "glm-4-9b-chat",
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": 0.3,
+                }
+                
+                import aiohttp
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(url, json=payload, headers=headers, timeout=30) as response:
+                        if response.status == 200:
+                            data = await response.json()
+                            content = data["choices"][0]["message"]["content"]
+                            if content:
+                                return content.strip()
+                        else:
+                            print(f"[⚠️] فشل الاتصال بخادم GLM Colab: رمز الحالة {response.status}")
+            except Exception as e:
+                print(f"[⚠️] خطأ أثناء الاتصال بـ GLM Colab: {e}")
+            
+            print("[ℹ/⚠️] محاولة الرجوع التلقائي إلى Google Gemini API...")
+
+        # 2. استخدام Google Gemini API كخيار أساسي أو كاحتياطي عند فشل Colab
+        if self.gemini_model:
+            try:
+                response = await self.gemini_model.generate_content_async(prompt)
+                if response and response.text:
+                    return response.text.strip()
+            except Exception as e:
+                print(f"[⚠️] فشل الاتصال بـ Gemini API: {e}")
+        
+        return None
     
     def extract_keywords_tfidf(self, text: str, top_n: int = 20, idf_dict: Optional[Dict[str, float]] = None) -> List[str]:
         """استخراج الكلمات المفتاحية باستخدام TF-IDF حقيقي"""
@@ -381,26 +430,42 @@ class AIAnalyzer:
         # تنظيف النص
         text = text[:15000]  # حد أقصى 15k حرف
         
-        # محاولة استخدام نموذج AI (Gemini)
+        # محاولة استخدام نموذج AI
         if config.use_ai_analysis:
             try:
                 if not self.nlp_initialized:
                     await self.initialize()
                 
-                if self.gemini_model:
-                    prompt = f"""قم بإنشاء ملخص احترافي شامل ومنسق للمعلومات التالية المستخرجة من نتائج محرك بحث.
-استخدم لغة عربية فصحى واضحة جداً. 
-استخدم تنسيق Markdown بشكل احترافي ومبسط (مثل القوائم النقطية، والخط العريض لأهم النقاط).
-تجاهل أي نصوص غير مترابطة أو إعلانات وركز فقط على صلب الموضوع، بحيث لا تتجاوز 400 كلمة.
+                prompt = f"""You are a master cognitive synthesizer for the RootSearch deep intelligence search engine.
+Your task is to analyze the gathered search results for the query "{query}" and generate a highly organized, world-class synthesis report in modern Arabic.
 
-النص المجمع من المصادر:
+Strictly organize the report using the following structure:
+
+# 📊 التلخيص المعرفي والتحليل الشامل للموضوع: {query}
+
+## 🔍 النظرة العامة والتحليل التنفيذي (Executive Summary)
+> [!NOTE]
+> *اكتب فقرة مقتضبة، مركزة، وعالية القيمة تلخص صلب الموضوع وأهميته.*
+
+## 💡 النقاط الرئيسية والحقائق المثبتة (Key Core Insights)
+* **[نقطة رئيسية 1]**: تفصيل مختصر ومباشر مدعوم بالبيانات.
+* **[نقطة رئيسية 2]**: تفصيل مختصر ومباشر مدعوم بالبيانات.
+* **[نقطة رئيسية 3]**: تفصيل مختصر ومباشر مدعوم بالبيانات.
+
+## 🧭 السياق الدلالي والأبعاد المحيطة (Contextual Dimensions)
+*اكتب تحليلاً للمحاور الجانبية المرتبطة بالاستعلام وكيف تتقاطع مع الموضوع الأساسي.*
+
+---
+*تأكد من استخدام تنسيق Markdown بشكل احترافي، وترك سطر فارغ بين كل فقرة أو عنصر لتفادي التصاق النصوص.*
+
+المحتوى المجمع من المصادر:
 {text}"""
-                    
-                    response = await self.gemini_model.generate_content_async(prompt)
-                    if response and response.text:
-                        return response.text
+                
+                summary = await self._call_llm(prompt)
+                if summary:
+                    return summary
             except Exception as e:
-                print(f"[⚠️] فشل التلخيص بواسطة Gemini: {e}")
+                print(f"[⚠️] فشل التلخيص بواسطة نموذج الـ AI: {e}")
         
         # Fallback: تلخيص بالاستخراج
         
@@ -480,7 +545,9 @@ class AIAnalyzer:
         # إعادة ترتيب حسب الظهور الأصلي
         selected.sort(key=lambda s: sentences.index(s) if s in sentences else 0)
         
-        return ' '.join(selected)
+        # تنسيق الجمل كنقاط رئيسية واضحة مفصولة بأسطر فارغة لمنع التصاق النصوص
+        formatted = [f"* {s}" for s in selected]
+        return "\n\n".join(formatted)
     
     async def analyze_result(self, result: SearchResult, idf_dict: Optional[Dict[str, float]] = None) -> Dict[str, Any]:
         """تحليل شامل لنتيجة بحث واحدة"""
@@ -584,6 +651,75 @@ class AIAnalyzer:
         
         # إزالة التكرارات
         unique_keywords = list(dict.fromkeys(all_keywords))[:50]
+        
+        # حساب إحصائيات الكلمات المفتاحية الفريدة وتفاصيلها السياقية والتوزيع
+        from urllib.parse import urlparse
+        rich_keywords = []
+        
+        # تنظيف كل الكلمات من المحتوى لحساب الكثافة والتردد العام
+        content_words = re.sub(r'[^\w\s]', ' ', all_content.lower()).split()
+        total_words_len = len(content_words) if content_words else 1
+        global_word_counts = Counter(content_words)
+        
+        for kw in unique_keywords[:35]: # نركز على أول 35 كلمة مفتاحية لتفادي إبطاء المعالجة
+            kw_lower = kw.lower()
+            kw_freq = global_word_counts.get(kw_lower, 0)
+            if kw_freq == 0:
+                kw_freq = all_content.lower().count(kw_lower)
+            
+            sites_list = []
+            contexts_list = []
+            sites_count = 0
+            
+            for res in results:
+                res_content = (res.content or res.snippet or '').lower()
+                if kw_lower in res_content:
+                    sites_count += 1
+                    res_words = re.sub(r'[^\w\s]', ' ', res_content).split()
+                    res_freq = res_words.count(kw_lower)
+                    if res_freq == 0:
+                        res_freq = res_content.count(kw_lower)
+                    
+                    domain = urlparse(res.url).netloc or res.source
+                    sites_list.append({
+                        'site': domain,
+                        'url': res.url,
+                        'count': res_freq
+                    })
+                    
+                    if len(contexts_list) < 5:
+                        sentences = re.split(r'[.!?؟\n]', res.content or res.snippet or '')
+                        for sentence in sentences:
+                            sentence_clean = sentence.strip()
+                            # فلترة مراجع ويكيبيديا والسطور غير المفهومة من السياقات النصية
+                            if kw_lower in sentence_clean.lower():
+                                s_low = sentence_clean.lower()
+                                if any(marker in s_low for marker in ['lccn', 'oclc', 'qid', 'isbn', 'doi', '↑', 'cite', 'ref']):
+                                    continue
+                                letters_count = sum(1 for c in sentence_clean if c.isalpha())
+                                if len(sentence_clean) > 0 and letters_count < len(sentence_clean) * 0.4:
+                                    continue
+                                
+                                if len(sentence_clean) > len(kw) + 10:
+                                    if len(sentence_clean) > 150:
+                                        sentence_clean = sentence_clean[:147] + "..."
+                                    if sentence_clean not in contexts_list:
+                                        contexts_list.append(sentence_clean)
+                                        if len(contexts_list) >= 5:
+                                            break
+            
+            sites_list.sort(key=lambda x: x['count'], reverse=True)
+            density = (kw_freq / total_words_len) * 100
+            
+            rich_keywords.append({
+                'word': kw,
+                'frequency': kw_freq,
+                'sites_count': sites_count,
+                'density': f"{density:.3f}%" if density > 0 else "0.01%",
+                'distribution': sites_list[:8],
+                'contexts': contexts_list[:5]
+            })
+            
         for category in all_entities:
             all_entities[category] = list(dict.fromkeys(all_entities[category]))[:10]
         
@@ -605,7 +741,7 @@ class AIAnalyzer:
                 'engines_count': len(sources),
                 'average_relevance': sum(r.relevance_score for r in results) / max(len(results), 1),
             },
-            'keywords': unique_keywords,
+            'keywords': rich_keywords,
             'entities': all_entities,
             'sentiment_overview': self._aggregate_sentiment(analyses),
             'top_results': [
@@ -620,12 +756,71 @@ class AIAnalyzer:
             ],
         }
         
-        # إضافة تلخيص شامل
+        # تهيئة قيم افتراضية لمنع فقدان المفاتيح في العرض
+        report['overall_summary'] = 'لا يوجد محتوى كافٍ للتلخيص.'
+        report['summary'] = 'لا يوجد محتوى كافٍ للتلخيص.'
+        report['executive_summary'] = 'لا يوجد محتوى كافٍ للتلخيص.'
+        report['deep_analysis'] = 'لا يوجد محتوى كافٍ للتحليل.'
+        report['fuckenbase_analysis'] = 'لا يوجد محتوى كافٍ للتحليل.'
+        
+        # إضافة تلخيص شامل والتحليل المعرفي العميق
         if all_content:
             try:
-                report['overall_summary'] = await self.summarize_text(all_content[:15000], 500, 100)
+                summary = await self.summarize_text(all_content[:15000], 500, 100)
+                report['overall_summary'] = summary
+                report['summary'] = summary
+                report['executive_summary'] = summary
             except Exception:
-                report['overall_summary'] = self._extractive_summary(all_content[:15000], 500)
+                summary = self._extractive_summary(all_content[:15000], 500)
+                report['overall_summary'] = summary
+                report['summary'] = summary
+                report['executive_summary'] = summary
+
+            # إضافة تحليل عميق (ROOTBASE / Deep Analysis)
+            if config.use_ai_analysis:
+                try:
+                    deep_prompt = f"""You are an elite research director and intelligence analyst.
+Perform a world-class deep cognitive analysis (ROOTBASE Analysis) for the query "{query}" based on the following search data.
+You must construct an extremely rigorous, analytical, and highly structured report in Arabic.
+
+Strictly format the output using this template:
+
+# 🧠 التحليل المعرفي المتقدم لشبكة العلاقات (Deep Cognitive Report)
+
+## 📌 الفرضية الأساسية والتوجهات العامة (Core Hypothesis & Trends)
+*اكتب تحليلاً نقدياً للفرضية الأساسية للموضوع وتوجهاته الحالية.*
+
+## ⚖️ مقارنة المصادر وتقييم المصداقية (Source Consensus & Contradiction)
+* **نقاط الاتفاق المشتركة**: [اكتب نقاط التوافق بين المصادر المختلفة في نقاط واضحة].
+* **نقاط التعارض والاختلاف**: [اكتب الاختلافات أو التناقضات بين المصادر بالتفصيل].
+* **تقييم موثوقية المعلومات**: [تحليل مدى صدق وموثوقية المصادر المجمعة].
+
+## ⛓️ شبكة الترابط والعلاقات المعرفية (Cognitive Entity Linkage)
+* **الكيانات الفاعلة**: [الشخصيات، المؤسسات، أو المفاهيم الأساسية وتأثيرها].
+* **العلاقات المتبادلة**: [كيف تترابط الكيانات ببعضها البعض ضمن هذا السياق].
+
+## 🎯 الخلاصة الاستشرافية والتوصيات (Forward-Looking Summary & Recommendations)
+> [!TIP]
+> *استنتاجات جوهرية عملية وتوقعات مستقبلية للموضوع.*
+
+---
+*تأكد من فصل الأقسام بوضوح باستخدام أسطر فارغة وعلامات Markdown المناسبة لمنع أي تداخل للنصوص.*
+
+المحتوى المجمع:
+{all_content[:15000]}"""
+                    deep_analysis_text = await self._call_llm(deep_prompt)
+                    if deep_analysis_text:
+                        report['deep_analysis'] = deep_analysis_text
+                        report['fuckenbase_analysis'] = deep_analysis_text
+                except Exception as e:
+                    print(f"[⚠️] فشل إنشاء التحليل العميق بواسطة الـ AI: {e}")
+
+            if 'deep_analysis' not in report or not report['deep_analysis'] or report['deep_analysis'] == 'لا يوجد محتوى كافٍ للتحليل.':
+                fallback_deep = "### التحليل التقليدي للمصادر\n\n" + "\n\n".join([
+                    f"**[{i+1}] {r.title}** (الدرجة: {r.relevance_score})\n\n{r.snippet}" for i, r in enumerate(results[:5])
+                ])
+                report['deep_analysis'] = fallback_deep
+                report['fuckenbase_analysis'] = fallback_deep
         
         return report
     
@@ -689,19 +884,18 @@ class AIAnalyzer:
         
     async def explain_keyword(self, query: str, keyword: str, results: List[Dict[str, Any]]) -> str:
         """تقديم توضيح بسيط ومختصر للكلمة المفتاحية في سياق الاستعلام"""
-        # محاولة استخدام Gemini أولاً
+        # محاولة استخدام الـ AI
         if config.use_ai_analysis:
             try:
                 if not self.nlp_initialized:
                     await self.initialize()
-                if self.gemini_model:
-                    prompt = f"""قم بتقديم تعريف أو توضيح بسيط ومختصر جداً (في جملة واحدة واضحة لا تزيد عن 20 كلمة) للكلمة أو المفهوم "{keyword}" في سياق موضوع البحث الحالي "{query}".
-إذا كان هذا الاسم يمثل شخصية معروفة أو كيان، اذكر من هو/هي أو ما هو باختصار شديد باللغة العربية. لا تستخدم علامات ترقيم زائدة."""
-                    response = await self.gemini_model.generate_content_async(prompt)
-                    if response and response.text:
-                        return response.text.strip()
+                prompt = f"""قم بتقديم تعريف سياقي فائق الوضوح والجودة للكلمة أو المفهوم "{keyword}" في سياق موضوع البحث "{query}".
+اكتب جملة واحدة بليغة ومباشرة (لا تزيد عن 20 كلمة) تلخص ماهية هذا المفهوم باللغة العربية الفصحى. لا تستخدم أي مقدمات أو هوامش، اكتب التعريف مباشرة."""
+                explanation = await self._call_llm(prompt)
+                if explanation:
+                    return explanation
             except Exception as e:
-                print(f"[⚠️] فشل تفسير الكلمة بواسطة Gemini: {e}")
+                print(f"[⚠️] فشل تفسير الكلمة بواسطة نموذج الـ AI: {e}")
                 
         # Fallback: استخلاص سياق توضيحي محلي من النصوص الممسوحة
         explanation = ""
@@ -712,14 +906,24 @@ class AIAnalyzer:
             sentences = re.split(r'[.!?؟\n]', content)
             for sentence in sentences:
                 sentence_clean = sentence.strip()
-                if keyword_lower in sentence_clean.lower() and len(sentence_clean) > len(keyword) + 10:
-                    # نفضل الجمل التي تحتوي على أدوات تعريف أو روابط مثل "هو"، "هي"، "عبارة عن"، "is", "was"
-                    indicators = [" هو ", " هي ", " عبارة عن ", " يعتبر ", " تعتبر ", " is ", " was ", " definition ", " يعني "]
-                    if any(ind in sentence_clean.lower() for ind in indicators):
-                        return sentence_clean[:120] + "..."
-                    # كاحتياطي أول جملة مناسبة
-                    if not explanation:
-                        explanation = sentence_clean[:120] + "..."
+                if keyword_lower in sentence_clean.lower():
+                    # التحقق من أن الجملة لا تحتوي على مراجع مشوهة أو أرقام كثيرة (مثل LCCN, OCLC, OL, QID, ↑)
+                    s_low = sentence_clean.lower()
+                    if any(marker in s_low for marker in ['lccn', 'oclc', 'qid', 'isbn', 'doi', '↑', 'cite', 'ref', 'dspace', 'pmid']):
+                        continue
+                    # التأكد من أن نسبة الحروف الأبجدية كافية (لتجنب سطور الأرقام والرموز)
+                    letters_count = sum(1 for c in sentence_clean if c.isalpha())
+                    if len(sentence_clean) > 0 and letters_count < len(sentence_clean) * 0.4:
+                        continue
+                    
+                    if len(sentence_clean) > len(keyword) + 10 and len(sentence_clean) < 300:
+                        # نفضل الجمل التي تحتوي على أدوات تعريف أو روابط مثل "هو"، "هي"، "عبارة عن"، "is", "was"
+                        indicators = [" هو ", " هي ", " عبارة عن ", " يعتبر ", " تعتبر ", " is ", " was ", " definition ", " يعني "]
+                        if any(ind in sentence_clean.lower() for ind in indicators):
+                            return sentence_clean[:150] + "..."
+                        # كاحتياطي أول جملة مناسبة
+                        if not explanation:
+                            explanation = sentence_clean[:150] + "..."
                         
         if explanation:
             return explanation
@@ -728,26 +932,26 @@ class AIAnalyzer:
     async def expand_query(self, query: str) -> List[str]:
         """توسيع الاستعلام إلى 3 استعلامات فرعية أكثر تخصصاً وتفرعاً"""
         await self.initialize()
-        if self.gemini_model:
-            try:
-                prompt = (
-                    f"You are part of a deep search engine called RootSearch. "
-                    f"Given the user search query: '{query}', generate exactly 3 distinct, highly targeted, "
-                    f"and relevant sub-queries or search terms to explore different angles of the query "
-                    f"for a comprehensive search. "
-                    f"Return ONLY a JSON list of strings, with no explanation and no markdown block. "
-                    f"Example: [\"term 1\", \"term 2\", \"term 3\"]"
-                )
-                response = await asyncio.to_thread(self.gemini_model.generate_content, prompt)
-                text = response.text.strip()
+        try:
+            prompt = (
+                f"You are part of a deep search engine called RootSearch. "
+                f"Given the user search query: '{query}', generate exactly 3 distinct, highly targeted, "
+                f"and relevant sub-queries or search terms to explore different angles of the query "
+                f"for a comprehensive search. "
+                f"Return ONLY a JSON list of strings, with no explanation and no markdown block. "
+                f"Example: [\"term 1\", \"term 2\", \"term 3\"]"
+            )
+            text = await self._call_llm(prompt)
+            if text:
+                text = text.strip()
                 # Clean code blocks if LLM ignored instructions
                 if text.startswith("```"):
                     text = re.sub(r"^```(?:json)?\n|\n```$", "", text, flags=re.MULTILINE).strip()
                 subqueries = json.loads(text)
                 if isinstance(subqueries, list) and len(subqueries) > 0:
                     return [str(q).strip() for q in subqueries[:3]]
-            except Exception as e:
-                print(f"[⚠️] Failed to expand query using Gemini: {e}")
+        except Exception as e:
+            print(f"[⚠️] Failed to expand query using AI model: {e}")
         
         # Fallback: heuristics based on query language
         words = [w for w in re.findall(r"\w+", query) if len(w) > 2]

@@ -132,3 +132,5 @@ Active.venv/
 .qodo/
 searx_instances.json
 .agents/
+.env
+

@@ -6,6 +6,10 @@ Fucken Search - Configuration Module
 import os
 from dataclasses import dataclass, field
 from typing import List, Optional
+from dotenv import load_dotenv
+
+# تحميل متغيرات البيئة من ملف .env
+load_dotenv()
 
 
 @dataclass
@@ -46,9 +50,14 @@ class SearchConfig:
     ])
     
     # إعدادات الذكاء الاصطناعي
-    # يعتمد التحليل الشامل على Google Gemini API إذا توفر المفتاح، وإلا سيعمل النظام الأساسي البديل
+    # يعتمد التحليل الشامل على Google Gemini API أو GLM المستضاف على Colab
     use_ai_analysis: bool = True
+    llm_provider: str = field(default_factory=lambda: os.getenv("LLM_PROVIDER", "gemini"))
     gemini_api_key: Optional[str] = field(default_factory=lambda: os.getenv("GEMINI_API_KEY", ""))
+    
+    # إعدادات نموذج GLM (Google Colab)
+    glm_api_url: Optional[str] = field(default_factory=lambda: os.getenv("GLM_API_URL", ""))
+    glm_api_key: Optional[str] = field(default_factory=lambda: os.getenv("GLM_API_KEY", ""))
     
     enable_entity_extraction: bool = True
     enable_sentiment_analysis: bool = True

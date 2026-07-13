@@ -51,6 +51,39 @@ def _cache_put(key: str, value: dict) -> None:
     search_cache[key] = value
 
 
+def format_scary_count_ar(n: int) -> str:
+    if not n or n <= 0:
+        return "صفر"
+    
+    ones = ['', 'واحد', 'اثنان', 'ثلاثة', 'أربعة', 'خمسة', 'ستة', 'سبعة', 'ثمانية', 'تسعة', 'عشرة', 'أحد عشر', 'اثنا عشر', 'ثلاثة عشر', 'أربعة عشر', 'خمسة عشر', 'ستة عشر', 'سبعة عشر', 'ثمانية عشر', 'تسعة عشر']
+    tens = ['', '', 'عشرون', 'ثلاثون', 'أربعون', 'خمسون', 'ستون', 'سبعون', 'ثمانون', 'تسعون']
+    hundreds = ['', 'مائة', 'مائتان', 'ثلاثمائة', 'أربعمائة', 'خمسمائة', 'ستمائة', 'سبعمائة', 'ثمانمائة', 'تسعمائة']
+    
+    def to_words(num: int) -> str:
+        if num == 0:
+            return ''
+        if num < 20:
+            return ones[num]
+        if num < 100:
+            unit = num % 10
+            ten = num // 10
+            return (ones[unit] + ' و ' if unit != 0 else '') + tens[ten]
+        if num < 1000:
+            hundred = num // 100
+            remainder = num % 100
+            return hundreds[hundred] + (' و ' + to_words(remainder) if remainder != 0 else '')
+        return str(num)
+        
+    if n == 1:
+        return "ألف"
+    elif n == 2:
+        return "مليون"
+    elif 3 <= n <= 10:
+        return to_words(n) + " مليارات"
+    else:
+        return to_words(n) + " مليار"
+
+
 # ─────────────────────────────────────────────
 #  SSE HELPER
 # ─────────────────────────────────────────────
@@ -330,7 +363,7 @@ async def api_search_stream(
                 "status": "search_done",
                 "count": total,
                 "sources": sources_counts,
-                "message": f"🔍 {total} نتيجة فريدة من {len(subqueries)} تفريعات",
+                "message": f"🔍 تم العثور على {format_scary_count_ar(total)} شيء من {len(subqueries)} تفريعات",
             }))
 
             if not all_results:
