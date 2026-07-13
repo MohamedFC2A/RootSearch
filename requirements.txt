@@ -10,7 +10,8 @@ trafilatura>=1.6.1
 lxml>=4.9.3
 
 # --- Web Server ---
-fastapi>=0.109.0
+fastapi==0.111.1
+starlette==0.37.2
 uvicorn[standard]>=0.27.0
 jinja2>=3.1.2
 python-multipart>=0.0.6
@@ -22,6 +23,7 @@ protobuf>=3.20.3
 
 # --- HuggingFace Space (Gradio) ---
 gradio>=4.44.0
+spaces
 
 # --- تحسينات إضافية ---
 aiofiles>=23.2.1

@@ -14,8 +14,11 @@ USE_GRADIO = os.getenv("HF_SPACE", "0") == "1" or os.getenv("GRADIO", "0") == "1
 if USE_GRADIO:
     # وضع HuggingFace Space — Gradio
     from gradio_app import demo
-    port = int(os.getenv("PORT", 7860))
-    demo.launch(server_name="0.0.0.0", server_port=port, show_api=False)
+    if IS_HF:
+        demo.launch()
+    else:
+        port = int(os.getenv("PORT", 7860))
+        demo.launch(server_name="0.0.0.0", server_port=port, show_api=False)
 else:
     # وضع FastAPI server المحلي
     import uvicorn

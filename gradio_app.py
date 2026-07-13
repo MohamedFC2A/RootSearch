@@ -13,6 +13,15 @@ from typing import Any, Dict, List, Optional
 
 import gradio as gr
 
+try:
+    import spaces
+    @spaces.GPU
+    def dummy_gpu_fn():
+        """Dummy GPU function to satisfy HuggingFace ZeroGPU requirement."""
+        pass
+except ImportError:
+    pass
+
 # تأكد من أن المسار صحيح عند التشغيل من أي مكان
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
