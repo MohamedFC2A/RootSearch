@@ -7,8 +7,9 @@ import os
 import sys
 
 # اختار وضع التشغيل من البيئة
-# HF_SPACE=1 → Gradio | بدونها → FastAPI
-USE_GRADIO = os.getenv("HF_SPACE", "0") == "1" or os.getenv("GRADIO", "0") == "1"
+# HF_SPACE=1 or GRADIO=1 or running inside a HF Space (SPACE_ID env var is set)
+IS_HF = "SPACE_ID" in os.environ
+USE_GRADIO = os.getenv("HF_SPACE", "0") == "1" or os.getenv("GRADIO", "0") == "1" or IS_HF
 
 if USE_GRADIO:
     # وضع HuggingFace Space — Gradio
