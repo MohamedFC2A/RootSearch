@@ -1,23 +1,25 @@
+"""
+FuckenSearch — Main Entry Point
+يحدد نوع التشغيل: HuggingFace Space (Gradio) أو FastAPI server
+"""
+
 import os
-import uvicorn
-import spaces
-from web.app import app
+import sys
 
-# دالة وهمية لإرضاء فحص التشغيل الخاص بـ Hugging Face ZeroGPU
-@spaces.GPU
-def dummy_gpu_function():
-    return "GPU Activated"
+# اختار وضع التشغيل من البيئة
+# HF_SPACE=1 → Gradio | بدونها → FastAPI
+USE_GRADIO = os.getenv("HF_SPACE", "0") == "1" or os.getenv("GRADIO", "0") == "1"
 
-@app.on_event("startup")
-async def startup_event():
-    # استدعاء الدالة عند تشغيل الخادم لإجبار نظام ZeroGPU على تفعيل الـ GPU والتحقق من صحتها
-    try:
-        dummy_gpu_function()
-    except Exception as e:
-        print(f"ZeroGPU Startup Trigger Error: {e}")
-
-if __name__ == "__main__":
-    # الحصول على المنفذ من متغيرات البيئة (Hugging Face يحدد منفذ 7860 افتراضياً)
+if USE_GRADIO:
+    # وضع HuggingFace Space — Gradio
+    from gradio_app import demo
     port = int(os.getenv("PORT", 7860))
-    # تشغيل خادم Uvicorn
-    uvicorn.run("web.app:app", host="0.0.0.0", port=port)
+    demo.launch(server_name="0.0.0.0", server_port=port, show_api=False)
+else:
+    # وضع FastAPI server المحلي
+    import uvicorn
+    from web.app import app
+
+    if __name__ == "__main__":
+        port = int(os.getenv("PORT", 6969))
+        uvicorn.run("web.app:app", host="0.0.0.0", port=port)

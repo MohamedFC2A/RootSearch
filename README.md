@@ -1,68 +1,80 @@
 ---
-title: RootSearch
+title: FuckenSearch
 emoji: 🔍
-colorFrom: blue
+colorFrom: purple
 colorTo: indigo
 sdk: gradio
-sdk_version: 4.36.1
-app_file: app.py
-pinned: false
+sdk_version: 4.44.0
+app_file: gradio_app.py
+pinned: true
+license: mit
+short_description: محرك بحث عميق يجمع من 22+ مصدر مجاني بدون API keys
 ---
 
-# 🔥 FUCKEN SEARCH - محرك البحث الخارق 🔥
+# 🔍 FuckenSearch — محرك البحث العميق
 
-### Deep Search Engine - يبحث في أعماق الإنترنت ويحلل كل شيء
-
----
-
-## 💀 ما هو Fucken Search؟
-
-**Fucken Search** هو محرك بحث خارق (Deep Search Engine) مبني بـ **Python الخالص** بدون أي APIs مدفوعة. يبحث في **جميع محركات البحث المجانية**، يسليق المواقع، يحلل المحتوى بالذكاء الاصطناعي، ويمنحك تقريراً شاملاً عن أي موضوع تبحث عنه.
+**محرك بحث متكامل** يجمع النتائج من **22+ مصدر مجاني** في وقت واحد — بدون أي API keys مدفوعة.
 
 ---
 
-## ⚡ القدرات الخارقة
+## ⚡ المصادر المدعومة (22+ مصدر)
 
-| الميزة | الوصف |
-|--------|-------|
-| 🔍 **5 محركات بحث** | DuckDuckGo, Google, Bing, Brave, SearXNG |
-| 🕷️ **تسليق عميق** | يسحب المحتوى من المواقع ويستخرج النص الأساسي |
-| 🧠 **AI مدمج** | تلخيص، تحليل مشاعر، استخراج كيانات |
-| 📊 **تحليل شامل** | إحصائيات، كلمات مفتاحية، تصنيفات |
-| 🌐 **واجهة ويب** | FastAPI مع واجهة جميلة ومتجاوبة |
-| 💻 **CLI** | واجهة سطر أوامر تفاعلية |
-| 🚀 **متوازي** | يعالج 50 طلب في نفس الوقت |
-| 🔒 **خصوصية** | بدون APIs مدفوعة، بدون تتبع |
+### 🔍 محركات البحث العامة
+| المصدر | النوع | الحالة |
+|--------|-------|--------|
+| DuckDuckGo | Web scraping | ✅ |
+| Startpage | Google proxy (بدون CAPTCHA) | ✅ |
+| Bing | Web scraping | ✅ |
+| Brave Search | Web scraping | ✅ |
+| Mojeek | محرك مستقل | ✅ |
+| Qwant | JSON API | ✅ |
+| Ecosia | Web scraping | ✅ |
+| SearXNG | Meta-search | ✅ |
+
+### 📚 موسوعات وبيانات
+| المصدر | النوع | الحالة |
+|--------|-------|--------|
+| Wikipedia | REST API (عربي + إنجليزي) | ✅ |
+| Wikidata | Search API | ✅ |
+
+### 🔬 أبحاث علمية (APIs مجانية 100%)
+| المصدر | النوع | الحالة |
+|--------|-------|--------|
+| arXiv | Atom/XML API | ✅ |
+| OpenAlex | REST API | ✅ |
+| Semantic Scholar | REST API | ✅ |
+| PubMed / NCBI | E-utilities API | ✅ |
+| CrossRef | REST API | ✅ |
+| CORE | REST API | ✅ |
+
+### 💬 مجتمعات تقنية
+| المصدر | النوع | الحالة |
+|--------|-------|--------|
+| Stack Exchange | REST API | ✅ |
+| Reddit | JSON endpoint | ✅ |
+| Hacker News | Algolia API | ✅ |
+
+### 📖 كتب وأرشيف
+| المصدر | النوع | الحالة |
+|--------|-------|--------|
+| Open Library | REST API | ✅ |
+| Internet Archive | Search API | ✅ |
+| Jina AI Search | AI-powered | ✅ |
 
 ---
 
-## 🚀 التشغيل السريع
-
-### 1️⃣ تثبيت المتطلبات
+## 🚀 التشغيل المحلي
 
 ```bash
+git clone https://github.com/your-username/FuckenSearch
 cd FuckenSearch
 pip install -r requirements.txt
-```
 
-### 2️⃣ تشغيل الواجهة الإلكترونية
+# تشغيل Gradio (HuggingFace-style)
+python gradio_app.py
 
-```bash
+# تشغيل FastAPI (local server)
 python run.py web
-```
-
-افتح المتصفح على: **http://localhost:6969**
-
-### 3️⃣ تشغيل واجهة سطر الأوامر
-
-```bash
-python run.py cli
-```
-
-### 4️⃣ بحث مباشر
-
-```bash
-python run.py "ما هو الذكاء الاصطناعي؟"
 ```
 
 ---
@@ -71,66 +83,34 @@ python run.py "ما هو الذكاء الاصطناعي؟"
 
 ```
 FuckenSearch/
-├── main.py              # ♥️ قلب المحرك
-├── config.py            # ⚙️ الإعدادات
+├── gradio_app.py        # 🎯 HuggingFace Space entry point
+├── app.py               # 🚀 Multi-mode entry point
+├── config.py            # ⚙️ الإعدادات (22 مصدر)
 ├── requirements.txt     # 📦 المتطلبات
-├── README.md           # 📖 هذا الملف
-├── run.py              # 🚀 مشغل التطبيق
 ├── core/
-│   ├── search_engine.py # 🔍 محركات البحث
+│   ├── search_engine.py # 🔍 22+ محرك بحث
 │   ├── scraper.py       # 🕷️ متسلق المواقع
 │   ├── analyzer.py      # 🧠 محلل AI
 │   └── aggregator.py    # 📊 مجمع النتائج
-├── web/
-│   ├── app.py           # 🌐 خادم FastAPI
-│   ├── templates/       # 🎨 قوالب HTML
-│   └── static/          # 📁 ملفات CSS/JS
-└── cli/
-    └── terminal.py      # 💻 واجهة الطرفية
+├── web/                 # 🌐 FastAPI web server
+└── cli/                 # 💻 واجهة سطر الأوامر
 ```
 
 ---
 
-## 🎯 طرق الاستخدام
+## 🧠 التقنيات
 
-### 🔹 بحث سريع
-يبحث في جميع المحركات ويعرض النتائج مرتبة.
-
-### 🔹 بحث عميق
-يبحث + يسليق المواقع + يحلل المحتوى + يلخص + يستخرج الكلمات المفتاحية.
-
-### 🔹 بحث في CLI
-تشغيل مباشر من سطر الأوامر مع تقرير كامل.
-
-### 🔹 بحث في الويب
-واجهة مستخدم جميلة مع تحليل فوري للنتائج.
+- **Python + asyncio** — بحث متوازي عالي الأداء
+- **aiohttp** — طلبات HTTP غير متزامنة
+- **BeautifulSoup4** — تحليل HTML
+- **trafilatura** — استخراج المحتوى
+- **Gradio** — واجهة HuggingFace Space
+- **FastAPI** — خادم API
 
 ---
 
-## 🧠 التقنيات المستخدمة
+## ⚠️ ملاحظة
 
-- **Python** - اللغة الأساسية
-- **aiohttp** - طلبات HTTP غير متزامنة
-- **BeautifulSoup4** - تحليل HTML
-- **trafilatura** - استخراج المحتوى الأساسي
-- **FastAPI** - خادم الويب
-- **Transformers** - نماذج AI للتلخيص
-- **DuckDuckGo / Google / Bing / Brave / SearXNG** - محركات البحث
+هذا المشروع للأغراض التعليمية والبحثية. يرجى احترام شروط خدمة المصادر المستخدمة.
 
----
-
-## ⚠️ ملاحظة مهمة
-
-هذا المشروع للأغراض التعليمية. يرجى احترام شروط الخدمة لمحركات البحث وقوانين حقوق النشر عند استخدامه.
-
----
-
-## 📜 الترخيص
-
-MIT License - استخدمه بحرية، طوره، شاركه.
-
----
-
-**🔥 Fucken Search - البحث الخارق في أعماق الإنترنت 🔥**
-
-*Built with 💀 Pure Python Power - Without Paid APIs*
+**MIT License** — مجاني، مفتوح المصدر، للجميع.
