@@ -136,6 +136,46 @@ function resetSearch() {
     document.body.classList.remove('results-active');
     treeNodes.clear();
     setStatusDot('idle', 'Ready');
+    setSearchButtonLoading(false);
+    hideProgressBar();
+}
+
+function setSearchButtonLoading(isLoading) {
+    const btn = document.getElementById('searchSubmitBtn');
+    if (!btn) return;
+    if (isLoading) {
+        btn.disabled = true;
+        btn.classList.add('loading-active');
+        const isMobile = window.innerWidth <= 600;
+        btn.innerHTML = `<i class="fas fa-spinner fa-spin"></i>${isMobile ? '' : ' <span>جاري البحث...</span>'}`;
+    } else {
+        btn.disabled = false;
+        btn.classList.remove('loading-active');
+        btn.innerHTML = `<span>ابحث</span><i class="fas fa-arrow-left" aria-hidden="true"></i>`;
+    }
+}
+
+function showProgressBar() {
+    const bar = document.getElementById('searchProgressBar');
+    const fill = document.getElementById('progressBarFill');
+    if (bar && fill) {
+        bar.style.display = 'block';
+        fill.style.width = '0%';
+    }
+}
+
+function updateProgressBar(percent) {
+    const fill = document.getElementById('progressBarFill');
+    if (fill) {
+        fill.style.width = percent + '%';
+    }
+}
+
+function hideProgressBar() {
+    const bar = document.getElementById('searchProgressBar');
+    if (bar) {
+        bar.style.display = 'none';
+    }
 }
 
 // ─── HANDLE SEARCH ────────────────────────────────────────────
@@ -157,6 +197,11 @@ function handleSearch(e) {
     if (heroSection) heroSection.style.display = 'none';
     resultsSection.style.display = '';
     document.body.classList.add('results-active');
+
+    // Set button and progress bar
+    setSearchButtonLoading(true);
+    showProgressBar();
+    updateProgressBar(10);
 
     // Reset tree
     resetLiveTree();
@@ -396,6 +441,14 @@ function startSSEStream(query, model) {
             } else {
                 updateTreeNode(d.nodeId, d.status, d.label, d.metadata, d.parentId);
             }
+            const stageProgress = {
+                trigger: 20,
+                source_discovery: 50,
+                extraction: 80,
+                semantic_analysis: 92,
+                verification: 98
+            };
+            if (stageProgress[d.stage]) updateProgressBar(stageProgress[d.stage]);
         } catch (_) { /* ignore parse errors */ }
     });
 
@@ -411,6 +464,14 @@ function startSSEStream(query, model) {
             if (['fetching','processing','success'].includes(d.status)) {
                 document.getElementById('treeStatus').textContent = d.label;
             }
+            const stageProgress = {
+                trigger: 20,
+                source_discovery: 50,
+                extraction: 80,
+                semantic_analysis: 92,
+                verification: 98
+            };
+            if (stageProgress[d.stage]) updateProgressBar(stageProgress[d.stage]);
         } catch (_) {}
     });
 
@@ -439,10 +500,10 @@ function startSSEStream(query, model) {
             document.getElementById('searchTime').textContent = elapsed;
             document.getElementById('resultsCount').textContent = report.total_results || 0;
             document.getElementById('treeStatus').textContent =
-                `Pipeline complete — ${report.total_results || 0} results in ${elapsed}s`;
+                `اكتمل البحث بنجاح — تم العثور على ${report.total_results || 0} نتيجة في ${elapsed} ثانية`;
 
             // Mark verification node done
-            updateTreeNode('verification', 'success', 'Report ready ✓', null);
+            updateTreeNode('verification', 'success', 'التقرير جاهز ✓', null);
 
             // Populate all panels
             renderAnalysis(report);
@@ -451,6 +512,12 @@ function startSSEStream(query, model) {
 
             setStatusDot('idle', 'Done');
             showToast(`تم العثور على ${report.total_results || 0} نتيجة`, 'success');
+            
+            updateProgressBar(100);
+            setTimeout(() => {
+                hideProgressBar();
+                setSearchButtonLoading(false);
+            }, 600);
 
             // Auto-switch to analysis after 1.5s
             setTimeout(() => {
@@ -459,6 +526,8 @@ function startSSEStream(query, model) {
 
         } catch(err) {
             console.error('complete parse error', err);
+            setSearchButtonLoading(false);
+            hideProgressBar();
         } finally {
             sse.close();
             activeSSE = null;
@@ -467,12 +536,13 @@ function startSSEStream(query, model) {
 
     // error
     sse.addEventListener('error', e => {
+        setSearchButtonLoading(false);
+        hideProgressBar();
         try {
             const d = JSON.parse(e.data);
             showToast(d.message || 'حدث خطأ', 'error');
-            document.getElementById('treeStatus').textContent = `Error: ${d.message || 'Unknown'}`;
+            document.getElementById('treeStatus').textContent = `خطأ: ${d.message || 'غير معروف'}`;
         } catch (_) {
-            // connection error
             if (sse.readyState === EventSource.CLOSED) {
                 setStatusDot('error', 'Disconnected');
             }
@@ -480,6 +550,8 @@ function startSSEStream(query, model) {
     });
 
     sse.onerror = () => {
+        setSearchButtonLoading(false);
+        hideProgressBar();
         if (sse.readyState === EventSource.CLOSED) {
             setStatusDot('error', 'Connection lost');
             activeSSE = null;

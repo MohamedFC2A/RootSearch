@@ -550,7 +550,6 @@ kbd {
   border: 1px solid rgba(255, 255, 255, 0.03);
   border-radius: var(--r-md);
   padding: var(--sp-4);
-  backdrop-filter: blur(10px);
 }
 
 .tree-col-connector {
@@ -1678,3 +1677,27 @@ kbd {
     display: block;
   }
 }
+
+/* ─── SEARCH PROGRESS BAR ─── */
+.search-progress-bar {
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  height: 3px;
+  background: rgba(255, 255, 255, 0.05);
+  z-index: 9999;
+  overflow: hidden;
+  display: none;
+}
+.progress-bar-fill {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, var(--accent), #8b5cf6, var(--accent));
+  background-size: 200% 100%;
+  animation: progress-shimmer 2s linear infinite;
+  transition: width 0.4s cubic-bezier(0.1, 0.8, 0.3, 1);
+}
+@keyframes progress-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
