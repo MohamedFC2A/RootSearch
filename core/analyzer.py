@@ -42,6 +42,15 @@ async def close_global_session():
                 _global_session = None
 
 
+_llm_semaphore = None
+
+def _get_llm_semaphore():
+    global _llm_semaphore
+    if _llm_semaphore is None:
+        _llm_semaphore = asyncio.Semaphore(3)
+    return _llm_semaphore
+
+
 class AIAnalyzer:
     """محلل الذكاء الاصطناعي - يعالج النصوص ويفهمها"""
     
@@ -114,10 +123,13 @@ class AIAnalyzer:
         """استدعاء DeepSeek عبر واجهة متوافقة مع OpenAI باستخدام الجلسة المشتركة"""
         if not config.deepseek_api_key:
             return None
-        import random
-        url = f"{config.deepseek_api_url.rstrip('/')}/chat/completions"
-        headers = {
-            "Content-Type": "application/json",
+        
+        sem = _get_llm_semaphore()
+        async with sem:
+            import random
+            url = f"{config.deepseek_api_url.rstrip('/')}/chat/completions"
+            headers = {
+                "Content-Type": "application/json",
             "Authorization": f"Bearer {config.deepseek_api_key}",
         }
         payload = {

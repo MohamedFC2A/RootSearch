@@ -25,10 +25,29 @@ class DomainCredibilityScorer:
         }
         # Tier 2: weight 0.7 (Encyclopedic & Verified Media)
         self.tier2_domains = {
-            "wikipedia.org", "en.wikipedia.org", "ar.wikipedia.org", "britannica.com",
-            "reuters.com", "apnews.com", "bbc.com", "bbc.co.uk", "nytimes.com",
-            "wsj.com", "economist.com", "nature.com", "science.org", "sciencedaily.com",
-            "bloomberg.com", "theguardian.com", "washingtonpost.com", "forbes.com"
+            # Science & Academics
+            "wikipedia.org", "en.wikipedia.org", "ar.wikipedia.org", "britannica.com", 
+            "nature.com", "science.org", "arxiv.org",
+            "pubmed.ncbi.nlm.nih.gov", "ncbi.nlm.nih.gov", "semanticscholar.org",
+            "openalex.org", "crossref.org", "core.ac.uk",
+            
+            # International News
+            "reuters.com", "apnews.com", "news.google.com", "bbc.com", "bbc.co.uk", 
+            "nytimes.com", "wsj.com", "economist.com", "sciencedaily.com", 
+            "bloomberg.com", "theguardian.com", "washingtonpost.com", "forbes.com",
+            "time.com", "cnn.com", "dw.com", "france24.com", "nationalgeographic.com",
+            
+            # Arabic News & References
+            "aljazeera.net", "aljazeera.com", "alarabiya.net", "skynewsarabia.com",
+            "youm7.com", "sabq.org", "hespress.com", "masrawy.com", "almasryalyoum.com",
+            "asharq.com", "okaz.com.sa", "alriyadh.com", "mawdoo3.com", "arageek.com",
+            "sotor.com", "estifada.com", "yallakora.com", "filgoal.com", "btolat.com",
+            
+            # Coding & Tech
+            "github.com", "stackoverflow.com", "npmjs.com", "pypi.org", "docker.com",
+            "w3schools.com", "developer.mozilla.org", "geeksforgeeks.org", "gitlab.com",
+            "microsoft.com", "apple.com", "google.com", "oracle.com", "ibm.com", 
+            "intel.com", "techcrunch.com", "wired.com", "cnet.com"
         }
 
     def get_domain_weight(self, url: str) -> float:

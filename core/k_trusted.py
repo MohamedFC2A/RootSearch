@@ -26,12 +26,28 @@ def is_domain_authorized(url: str, query: str = "") -> bool:
     # Base trusted list
     trusted_extensions = (".gov", ".edu", ".org")
     trusted_domains = [
-        "wikipedia.org", "reuters.com", "apnews.com", "news.google.com", 
-        "britannica.com", "nature.com", "science.org", "arxiv.org",
+        # Science & Academics
+        "wikipedia.org", "britannica.com", "nature.com", "science.org", "arxiv.org",
         "pubmed.ncbi.nlm.nih.gov", "ncbi.nlm.nih.gov", "semanticscholar.org",
         "openalex.org", "crossref.org", "core.ac.uk",
-        "bbc.com", "bbc.co.uk", "nytimes.com", "wsj.com", "economist.com",
-        "sciencedaily.com", "bloomberg.com", "theguardian.com", "washingtonpost.com", "forbes.com"
+        
+        # International News
+        "reuters.com", "apnews.com", "news.google.com", "bbc.com", "bbc.co.uk", 
+        "nytimes.com", "wsj.com", "economist.com", "sciencedaily.com", 
+        "bloomberg.com", "theguardian.com", "washingtonpost.com", "forbes.com",
+        "time.com", "cnn.com", "dw.com", "france24.com", "nationalgeographic.com",
+        
+        # Arabic News & References (Mawdoo3, Al Jazeera, etc.)
+        "aljazeera.net", "aljazeera.com", "alarabiya.net", "skynewsarabia.com",
+        "youm7.com", "sabq.org", "hespress.com", "masrawy.com", "almasryalyoum.com",
+        "asharq.com", "okaz.com.sa", "alriyadh.com", "mawdoo3.com", "arageek.com",
+        "sotor.com", "estifada.com", "yallakora.com", "filgoal.com", "btolat.com",
+        
+        # Coding & Tech
+        "github.com", "stackoverflow.com", "npmjs.com", "pypi.org", "docker.com",
+        "w3schools.com", "developer.mozilla.org", "geeksforgeeks.org", "gitlab.com",
+        "microsoft.com", "apple.com", "google.com", "oracle.com", "ibm.com", 
+        "intel.com", "techcrunch.com", "wired.com", "cnet.com"
     ]
     
     # Dynamic additions based on query entities

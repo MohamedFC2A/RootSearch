@@ -30,7 +30,7 @@
     window.API_BASE = FALLBACK_REMOTE_BACKEND_URL; // قيمة احتياطية فورية
     window.API_BASE_PROMISE = (async function () {
       try {
-        const response = await fetch("https://keyvalue.immanuel.co/api/KeyVal/GetValue/" + APP_KEY + "/" + KEY);
+        const response = await fetch("https://keyvalue.immanuel.co/api/KeyVal/GetValue/" + APP_KEY + "/" + KEY + "?t=" + Date.now(), { cache: "no-store" });
         const encodedUrl = await response.json();
         if (encodedUrl && encodedUrl !== "null") {
           // فك تشفير Base64 للرابط
