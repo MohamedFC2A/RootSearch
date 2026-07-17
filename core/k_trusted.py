@@ -38,7 +38,7 @@ def is_domain_authorized(url: str, query: str = "") -> bool:
     query_lower = query.lower() if query else ""
     # Sports
     if any(w in query_lower for w in ["sports", "football", "soccer", "kooora", "كرة القدم", "رياضة", "fifa", "ronaldo", "messi", "لاعب", "لاعبين", "نادي", "tall", "طول", "بطولة", "الدوري", "كأس"]):
-        trusted_domains.extend(["fifa.com", "espn.com", "kooora.com", "olympics.com", "laliga.com", "premierleague.com"])
+        trusted_domains.extend(["fifa.com", "espn.com", "kooora.com", "olympics.com", "laliga.com", "premierleague.com", "sofascore.com", "transfermarkt.com", "goal.com", "foxsports.com", "si.com", "sportsdunia.com", "soccerwiki.org"])
     # Chemistry
     if any(w in query_lower for w in ["chemistry", "chemical", "molecule", "pubchem", "كيمياء", "جزيء", "تفاعل", "biology", "dna", "protein", "بروتين", "خلية", "جين", "gene"]):
         trusted_domains.extend(["pubchem.ncbi.nlm.nih.gov", "chembl.git", "acs.org", "rsc.org", "chemspider.com"])
@@ -73,11 +73,19 @@ def is_domain_authorized(url: str, query: str = "") -> bool:
     if any(td == domain or domain.endswith(f".{td}") for td in trusted_domains):
         return True
 
-    # مواءمة مع DomainCredibilityScorer: مزامنة مع نطاقات الفئة 2
+    # مواءمة مع DomainCredibilityScorer: مزامنة مع نطاقات الفئة 1 والفئة 2
     try:
         from core.cognitive import DomainCredibilityScorer
-        tier2 = DomainCredibilityScorer().tier2_domains
+        scorer = DomainCredibilityScorer()
+        tier1 = scorer.tier1_domains
+        tier2 = scorer.tier2_domains
         norm_domain = domain[4:] if domain.startswith("www.") else domain
+        
+        tier1_sports = {"fifa.com", "olympics.com", "uefa.com", "nba.com", "premierleague.com"}
+        tier1_general = tier1 - tier1_sports
+        
+        if norm_domain in tier1_general or any(norm_domain.endswith("." + d) for d in tier1_general):
+            return True
         if norm_domain in tier2 or any(norm_domain.endswith("." + d) for d in tier2):
             return True
     except Exception:

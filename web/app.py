@@ -319,11 +319,17 @@ async def api_search_stream(
             from core.analyzer import AIAnalyzer
             analyzer = AIAnalyzer()
             
-            # Perform query expansion (branching)
+            # Perform query expansion (branching) with a strict 4-second timeout to prevent blocking
             subqueries = [q]  # Always include the original query
             try:
-                expanded = await analyzer.expand_query(q, model=model)
-                subqueries.extend(expanded)
+                expanded = await asyncio.wait_for(
+                    analyzer.expand_query(q, model=model),
+                    timeout=4.0
+                )
+                if expanded:
+                    subqueries.extend(expanded)
+            except asyncio.TimeoutError:
+                print("[Query Expansion Timeout] AI query expansion took too long, proceeding with original query immediately.")
             except Exception as e:
                 print(f"[Query Expansion Error] {e}")
 
@@ -347,7 +353,7 @@ async def api_search_stream(
             else:
                 primary_engine_funcs = dict(list(primary_engine_funcs.items())[:3])
 
-            timeout_val = 30.0 if model == "fathom_max" else 12.0
+            timeout_val = 45.0 if model == "fathom_max" else 20.0
 
             # Emit the subquery nodes
             for idx, sq in enumerate(subqueries):
