@@ -80,8 +80,7 @@ class SearchConfig:
 
     # ── إعدادات الذكاء الاصطناعي ─────────────────────────────────────
     use_ai_analysis: bool = True
-    llm_provider: str = field(default_factory=lambda: os.getenv("LLM_PROVIDER", "gemini"))
-    gemini_api_key: Optional[str] = field(default_factory=lambda: os.getenv("GEMINI_API_KEY", ""))
+    llm_provider: str = field(default_factory=lambda: os.getenv("LLM_PROVIDER", "deepseek"))
     glm_api_url: Optional[str] = field(default_factory=lambda: os.getenv("GLM_API_URL", ""))
     glm_api_key: Optional[str] = field(default_factory=lambda: os.getenv("GLM_API_KEY", ""))
     # ── DeepSeek (OpenAI-compatible API) ──

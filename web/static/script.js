@@ -9,7 +9,7 @@
 // ─── API BASE ────────────────────────────────
 // عنوان الباك-اند. يُضبط من config.js (window.API_BASE).
 // فارغ "" = نفس الأصل (تشغيل محلي) — أو رابط النفق عند النشر على Vercel.
-const API_BASE = (window.API_BASE || '').replace(/\/+$/, '');
+let API_BASE = (window.API_BASE || '').replace(/\/+$/, '');
 
 let visNetworkInstance = null;
 let visNetworkData     = null;
@@ -37,7 +37,15 @@ let currentTreeViewMode = 'visual'; // 'visual' | 'linear'
 
 
 // ─── INIT ─────────────────────────────────────────────────────
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
+    if (window.API_BASE_PROMISE) {
+        try {
+            const url = await window.API_BASE_PROMISE;
+            API_BASE = (url || '').replace(/\/+$/, '');
+        } catch (e) {
+            console.error("Error awaiting API_BASE_PROMISE:", e);
+        }
+    }
     initSearchInput();
     loadSystemStatus();
     initModelSelector();

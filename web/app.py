@@ -91,6 +91,13 @@ async def _shutdown_shared_engine() -> None:
             pass
         finally:
             _shared_engine = None
+    
+    # Close AIAnalyzer global session
+    try:
+        from core.analyzer import close_global_session
+        await close_global_session()
+    except Exception:
+        pass
 
 # ─────────────────────────────────────────────
 #  LRU CACHE

@@ -6,6 +6,8 @@ Fucken Search - AI Analysis Module
 import asyncio
 import re
 import json
+import base64
+import aiohttp
 from collections import Counter
 from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime
@@ -13,13 +15,38 @@ from datetime import datetime
 from config import config
 from core.search_engine import SearchResult
 
+# ─────────────────────────────────────────────────────────────
+#  GLOBAL SHARED CONNECTION POOL FOR DEEPSEEK
+# ─────────────────────────────────────────────────────────────
+_session_lock = asyncio.Lock()
+_global_session: Optional[aiohttp.ClientSession] = None
+
+async def _get_global_session() -> aiohttp.ClientSession:
+    """إرجاع جلسة اتصال HTTP مشتركة ومستقرة لإعادة استخدام اتصالات TCP"""
+    global _global_session
+    if _global_session is None or _global_session.closed:
+        async with _session_lock:
+            if _global_session is None or _global_session.closed:
+                # حد أقصى للاتصالات المتزامنة 100 مع كاش DNS طويل
+                connector = aiohttp.TCPConnector(limit=100, ttl_dns_cache=300)
+                _global_session = aiohttp.ClientSession(connector=connector)
+    return _global_session
+
+async def close_global_session():
+    """إغلاق الجلسة المشتركة بشكل نظيف عند إيقاف السيرفر"""
+    global _global_session
+    if _global_session is not None and not _global_session.closed:
+        async with _session_lock:
+            if _global_session is not None and not _global_session.closed:
+                await _global_session.close()
+                _global_session = None
+
 
 class AIAnalyzer:
     """محلل الذكاء الاصطناعي - يعالج النصوص ويفهمها"""
     
     def __init__(self, on_event=None):
         self.on_event = on_event
-        self.gemini_model = None
         self.nlp_initialized = False
         self._init_lock = asyncio.Lock()
     
@@ -33,37 +60,22 @@ class AIAnalyzer:
                 return
             
             try:
-                # تهيئة Gemini دائماً إذا كان المفتاح متوفراً ليكون كخيار احتياطي (Fallback)
-                if config.gemini_api_key:
-                    try:
-                        import google.generativeai as genai
-                        genai.configure(api_key=config.gemini_api_key)
-                        self.gemini_model = genai.GenerativeModel('gemini-2.5-flash')
-                        print("[*] تم تهيئة Google Gemini API بنجاح كخيار احتياطي/أساسي")
-                    except Exception as ge:
-                        print(f"[!] تعذر تهيئة Gemini API: {ge}")
-
-                if config.llm_provider == "glm_colab":
-                    if config.glm_api_url:
-                        print(f"[*] تم ربط خادم البحث بنموذج GLM المستضاف على Colab: {config.glm_api_url}")
-                    else:
-                        print("[!] تم اختيار GLM Colab ولكن رابط GLM_API_URL غير متوفر في الإعدادات.")
-
-                if config.llm_provider == "deepseek":
-                    if config.deepseek_api_key:
-                        print(f"[*] تم ربط خادم البحث بنموذج DeepSeek: {config.deepseek_model}")
-                    else:
-                        print("[!] تم اختيار DeepSeek ولكن DEEPSEEK_API_KEY غير متوفر في الإعدادات.")
+                # تهيئة الجلسة المشتركة مسبقاً
+                await _get_global_session()
+                
+                if config.deepseek_api_key:
+                    print(f"[*] تم تهيئة نموذج DeepSeek بنجاح كالمزود الأساسي: {config.deepseek_model}")
+                else:
+                    print("[!] تحذير: DEEPSEEK_API_KEY غير متوفر في الإعدادات.")
                 
                 self.nlp_initialized = True
                     
             except Exception as e:
                 print(f"[!] تعذر تهيئة مزود الـ AI: {e}")
-                print("[!] سيتم استخدام التحليل التقليدي عند الحاجة")
                 self.nlp_initialized = True
 
     async def _call_llm(self, prompt: str) -> Optional[str]:
-        """استدعاء نموذج اللغة المختار (GLM Colab أو Gemini) مع الرجوع التلقائي عند الفشل"""
+        """استدعاء DeepSeek كنموذج أساسي وحيد للتحليل والتلخيص"""
         # 1. محاولة استخدام GLM Colab أولاً إذا تم اختياره وتوفر الرابط
         if config.llm_provider == "glm_colab" and config.glm_api_url:
             try:
@@ -78,58 +90,28 @@ class AIAnalyzer:
                     "temperature": 0.3,
                 }
                 
-                import aiohttp
-                async with aiohttp.ClientSession() as session:
-                    async with session.post(url, json=payload, headers=headers, timeout=30) as response:
-                        if response.status == 200:
-                            data = await response.json()
-                            content = data["choices"][0]["message"]["content"]
-                            if content:
-                                return content.strip()
-                        else:
-                            print(f"[⚠️] فشل الاتصال بخادم GLM Colab: رمز الحالة {response.status}")
+                session = await _get_global_session()
+                async with session.post(url, json=payload, headers=headers, timeout=30) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        content = data["choices"][0]["message"]["content"]
+                        if content:
+                            return content.strip()
+                    else:
+                        print(f"[⚠️] فشل الاتصال بخادم GLM Colab: رمز الحالة {response.status}")
             except Exception as e:
                 print(f"[⚠️] خطأ أثناء الاتصال بـ GLM Colab: {e}")
             
-            print("[ℹ/⚠️] محاولة الرجوع التلقائي إلى Google Gemini API...")
+            print("[ℹ/⚠️] محاولة الرجوع التلقائي إلى DeepSeek...")
 
-        # 1b. استخدام DeepSeek (متوافق مع OpenAI) إذا تم اختياره وتوفر المفتاح
-        if config.llm_provider == "deepseek" and config.deepseek_api_key:
-            result = await self._call_deepseek(prompt)
-            if result:
-                return result
-            print("[ℹ/⚠️] محاولة الرجوع التلقائي إلى Google Gemini API...")
-
-        # 2. استخدام Google Gemini API كخيار أساسي أو كاحتياطي عند فشل Colab
-        if self.gemini_model:
-            import random
-            # Sanitize the prompt to replace triple quote characters that might break formatting boundaries
-            prompt = prompt.replace('"""', '"').replace("'''", "'")
-            
-            max_retries = 3
-            for attempt in range(max_retries):
-                try:
-                    response = await self.gemini_model.generate_content_async(prompt)
-                    if response and response.text:
-                        return response.text.strip()
-                except Exception as e:
-                    err_msg = str(e)
-                    if config.gemini_api_key:
-                        err_msg = err_msg.replace(config.gemini_api_key, "[REDACTED_API_KEY]")
-                    
-                    is_rate_limit = "429" in err_msg or "quota" in err_msg.lower() or "exhausted" in err_msg.lower()
-                    if is_rate_limit and attempt < max_retries - 1:
-                        sleep_time = random.uniform(1.0, 2.0 * (2 ** attempt))
-                        print(f"[⚠️] Gemini API rate limit (429) hit. Retrying in {sleep_time:.2f}s... (Attempt {attempt+1}/{max_retries})")
-                        await asyncio.sleep(sleep_time)
-                    else:
-                        print(f"[⚠️] فشل الاتصال بـ Gemini API: {err_msg}")
-                        break
+        # 2. الاستدعاء الأساسي لـ DeepSeek
+        if config.deepseek_api_key:
+            return await self._call_deepseek(prompt)
         
         return None
     
     async def _call_deepseek(self, prompt: str) -> Optional[str]:
-        """استدعاء DeepSeek عبر واجهة متوافقة مع OpenAI (وضع سريع بدون thinking)."""
+        """استدعاء DeepSeek عبر واجهة متوافقة مع OpenAI باستخدام الجلسة المشتركة"""
         if not config.deepseek_api_key:
             return None
         import random
@@ -144,37 +126,39 @@ class AIAnalyzer:
             "temperature": 0.3,
             "max_tokens": 4096,
             "stream": False,
-            # وضع غير التفكير لسرعة أعلى وتكلفة أقل (مناسب للتلخيص/الاستخراج)
-            "thinking": {"type": "disabled"},
         }
-        import aiohttp
-        max_retries = 3
+        
+        session = await _get_global_session()
+        max_retries = 5
         for attempt in range(max_retries):
             try:
-                async with aiohttp.ClientSession() as session:
-                    async with session.post(url, json=payload, headers=headers, timeout=60) as response:
-                        if response.status == 200:
-                            data = await response.json()
-                            content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
-                            if content:
-                                return content.strip()
-                            return None
-                        # 429 تجاوز الحد — إعادة المحاولة مع تأخير متزايد
-                        if response.status == 429 and attempt < max_retries - 1:
-                            sleep_time = random.uniform(1.0, 2.0 * (2 ** attempt))
-                            print(f"[⚠️] DeepSeek rate limit (429). Retrying in {sleep_time:.2f}s... ({attempt+1}/{max_retries})")
-                            await asyncio.sleep(sleep_time)
-                            continue
-                        err = await response.text()
-                        if config.deepseek_api_key:
-                            err = err.replace(config.deepseek_api_key, "[REDACTED_API_KEY]")
-                        print(f"[⚠️] فشل الاتصال بـ DeepSeek: رمز {response.status} — {err[:300]}")
+                async with session.post(url, json=payload, headers=headers, timeout=60) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+                        if content:
+                            return content.strip()
                         return None
+                    # 429 تجاوز الحد — إعادة المحاولة مع تأخير متزايد
+                    if response.status == 429 and attempt < max_retries - 1:
+                        sleep_time = random.uniform(2.0, 4.0 * (2 ** attempt))
+                        print(f"[⚠️] DeepSeek rate limit (429). Retrying in {sleep_time:.2f}s... ({attempt+1}/{max_retries})")
+                        await asyncio.sleep(sleep_time)
+                        continue
+                    err = await response.text()
+                    if config.deepseek_api_key:
+                        err = err.replace(config.deepseek_api_key, "[REDACTED_API_KEY]")
+                    print(f"[⚠️] فشل الاتصال بـ DeepSeek: رمز {response.status} — {err[:300]}")
+                    return None
             except Exception as e:
                 err_msg = str(e)
                 if config.deepseek_api_key:
                     err_msg = err_msg.replace(config.deepseek_api_key, "[REDACTED_API_KEY]")
                 print(f"[⚠️] خطأ أثناء الاتصال بـ DeepSeek: {err_msg}")
+                # For network errors, retry as well if we have attempts left
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(random.uniform(1.0, 2.0))
+                    continue
                 return None
         return None
     
@@ -743,7 +727,7 @@ Webpage content to process:
         formatted = [f"* {s}" for s in selected]
         return "\n\n".join(formatted)
     
-    async def analyze_result(self, result: SearchResult, idf_dict: Optional[Dict[str, float]] = None) -> Dict[str, Any]:
+    async def analyze_result(self, result: SearchResult, idf_dict: Optional[Dict[str, float]] = None, use_llm_summary: bool = True) -> Dict[str, Any]:
         """تحليل شامل لنتيجة بحث واحدة"""
         analysis = {
             'url': result.url,
@@ -772,14 +756,18 @@ Webpage content to process:
             
             # تلخيص
             if config.enable_summarization:
-                summary = await self.summarize_text(content, query=result.metadata.get('subquery', '') or result.title, is_synthesis=False)
+                if use_llm_summary:
+                    summary = await self.summarize_text(content, query=result.metadata.get('subquery', '') or result.title, is_synthesis=False)
+                else:
+                    # تلخيص بالاستخراج محلياً ومجانياً لتسريع العملية ومنع أخطاء الـ 429
+                    summary = self._extractive_summary(content, max_length=300)
                 if summary:
                     analysis['summary'] = summary
         
         return analysis
     
     async def analyze_results_batch(self, results: List[SearchResult]) -> List[Dict[str, Any]]:
-        """تحليل مجموعة من النتائج بشكل متوازي"""
+        """تحليل مجموعة من النتائج بشكل متوازي مع ترشيد استخدام الـ LLM لتفادي الـ 429"""
         # تهيئة AI أولاً
         if config.use_ai_analysis:
             await self.initialize()
@@ -805,8 +793,10 @@ Webpage content to process:
         
         # تحليل كل نتيجة بشكل متوازي لتسريع العملية
         tasks = []
-        for result in results[:20]:
-            tasks.append(self.analyze_result(result, idf_dict=idf_dict))
+        # نقوم بتلخيص أفضل 8 مصادر فقط باستخدام الـ LLM (DeepSeek) وتلخيص الباقي محلياً لتوفير الكاش وتفادي الـ 429
+        for idx, result in enumerate(results[:20]):
+            use_llm_summary = (idx < 8) and config.enable_summarization
+            tasks.append(self.analyze_result(result, idf_dict=idf_dict, use_llm_summary=use_llm_summary))
         
         raw_results = await asyncio.gather(*tasks, return_exceptions=True)
         
