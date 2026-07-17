@@ -436,12 +436,15 @@ class KTrustVerificationEngine:
             sentences = self.nli.split_sentences(text)
             has_valid_consensus = False
             contested_matrix_rows = []
+            surviving_sentences = []
             
             for s in sentences:
                 fvs, status, details = self.mcs.solve(s, query, sources)
                 if status == "Fact":
                     has_valid_consensus = True
+                    surviving_sentences.append(s)
                 elif status == "Contested":
+                    surviving_sentences.append(s)
                     for d in details:
                         contested_matrix_rows.append({
                             "claim": s,
@@ -451,9 +454,14 @@ class KTrustVerificationEngine:
                             "bias": d["bias"],
                             "fvs": fvs
                         })
+                else:
+                    # status == "Discard" -> نلغي هذه الجملة لضمان موثوقية فائقة بنسبة 100%
+                    pass
             
             if not has_valid_consensus and not contested_matrix_rows and len(sentences) > 0:
-                return "Data unverified by K-Trust algorithms due to conflicting or unreliable sources."
+                return "لم يتم التحقق من صحة البيانات بواسطة خوارزميات K-Trust لعدم تطابقها أو لعدم موثوقية المصادر."
+            
+            text = " ".join(surviving_sentences)
             
             # If contested claims exist, append the comparison matrix of opposing views
             if contested_matrix_rows:

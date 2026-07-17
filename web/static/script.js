@@ -20,7 +20,7 @@ let activeSSE          = null;
 let searchStartTime    = 0;
 
 // K-Trusted & Depth limits state
-let isKTrustedActive = false;
+let isKTrustedActive = localStorage.getItem('isKTrustedActive') === 'true';
 let isDepthUpgraded = false;
 let systemLimits = {
     fathom_s1_max_sources: 35,
@@ -59,6 +59,9 @@ document.addEventListener('DOMContentLoaded', async () => {
             toggleKTrustedMode();
         }
     });
+
+    // Apply persisted K-Trust UI state
+    applyKTrustedUI();
 });
 
 function updateEngineCounter() {
@@ -77,9 +80,7 @@ function updateEngineCounter() {
     ec.textContent = count;
 }
 
-function toggleKTrustedMode() {
-    isKTrustedActive = !isKTrustedActive;
-
+function applyKTrustedUI() {
     const capsule  = document.getElementById('searchInputCapsule');
     const btn      = document.getElementById('kTrustedToggleBtn');
     const statusHint = document.getElementById('ktStatusHint');
@@ -110,6 +111,13 @@ function toggleKTrustedMode() {
     }
 
     updateEngineCounter();
+}
+
+function toggleKTrustedMode() {
+    isKTrustedActive = !isKTrustedActive;
+    localStorage.setItem('isKTrustedActive', isKTrustedActive);
+    
+    applyKTrustedUI();
 
     showToast(
         isKTrustedActive ? '🛡 K-Trust مفعّل — تحقق فائق من جميع المصادر' : 'K-Trust معطّل',
@@ -221,18 +229,31 @@ function clearSearch() {
 }
 
 function resetSearch() {
+    // 1. إغلاق الاتصالات والعدادات النشطة
     if (window._sseReconnectTimer) { clearTimeout(window._sseReconnectTimer); window._sseReconnectTimer = null; }
     if (activeSSE) { activeSSE.close(); activeSSE = null; }
     if (window.searchTimerInterval) { clearInterval(window.searchTimerInterval); window.searchTimerInterval = null; }
-    document.getElementById('searchInput').value = '';
-    document.getElementById('clearBtn').style.display = 'none';
-    document.getElementById('resultsSection').style.display = 'none';
-    document.getElementById('heroSection').style.display = '';
-    document.body.classList.remove('results-active');
-    treeNodes.clear();
-    setStatusDot('idle', 'Ready');
-    setSearchButtonLoading(false);
-    hideProgressBar();
+    
+    // 2. حذف جميع ملفات تعريف الارتباط (Cookies)
+    document.cookie.split(";").forEach(function(c) {
+        document.cookie = c.replace(/^ +/, "").replace(/=.*/, "=;expires=" + new Date().toUTCString() + ";path=/");
+    });
+    
+    // 3. مسح الذاكرة المؤقتة للجلسة (Session Storage)
+    sessionStorage.clear();
+    
+    // 4. مسح الذاكرة المحلية (Local Storage) مع الحفاظ على وضع K-Trust
+    const kTrust = localStorage.getItem('isKTrustedActive');
+    localStorage.clear();
+    if (kTrust !== null) {
+        localStorage.setItem('isKTrustedActive', kTrust);
+    }
+    
+    // 5. إظهار رسالة تأكيد للمستخدم والتحميل النظيف للصفحة من جديد
+    showToast('جاري بدء بحث جديد نظيف وتصفير الجلسة بالكامل...', 'info', 1500);
+    setTimeout(() => {
+        window.location.href = window.location.origin + window.location.pathname;
+    }, 600);
 }
 
 function setSearchButtonLoading(isLoading) {
@@ -1588,31 +1609,37 @@ document.addEventListener('click', e => {
 });
 
 // ─── EXPORT ───────────────────────────────────────────────────
-// ── Topology Dropdown Toggle ──────────────────────────────────────────────────
-function toggleTopoMenu() {
-    const btn      = document.getElementById('topoExportBtn');
-    const dropdown = document.getElementById('topoDropdown');
+// ── Export Dropdown Toggle ──────────────────────────────────────────────────
+function toggleExportMenu(e) {
+    if (e) e.stopPropagation();
+    const dropdown = document.getElementById('exportDropdown');
+    const btn = document.getElementById('exportDropdownBtn');
     if (!dropdown) return;
     const isOpen = dropdown.classList.contains('open');
     if (isOpen) {
-        dropdown.classList.remove('open');
-        btn && btn.classList.remove('open');
+        closeExportMenu();
     } else {
         dropdown.classList.add('open');
         btn && btn.classList.add('open');
         // Close on outside click
         setTimeout(() => {
-            const handler = (e) => {
-                const wrap = document.getElementById('topoExportWrap');
-                if (wrap && !wrap.contains(e.target)) {
-                    dropdown.classList.remove('open');
-                    btn && btn.classList.remove('open');
+            const handler = (event) => {
+                const wrap = document.getElementById('exportDropdownWrap');
+                if (wrap && !wrap.contains(event.target)) {
+                    closeExportMenu();
                     document.removeEventListener('click', handler);
                 }
             };
             document.addEventListener('click', handler);
         }, 10);
     }
+}
+
+function closeExportMenu() {
+    const dropdown = document.getElementById('exportDropdown');
+    const btn = document.getElementById('exportDropdownBtn');
+    if (dropdown) dropdown.classList.remove('open');
+    if (btn) btn.classList.remove('open');
 }
 
 function exportAsJSON() {

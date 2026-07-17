@@ -196,41 +196,60 @@
                 </button>
             </div>
             <div class="results-actions">
-                <button class="action-icon-btn" onclick="exportAsJSON()" title="تصدير JSON">
-                    <i class="fas fa-file-code"></i>
-                </button>
-                <button class="action-icon-btn" onclick="exportAsText()" title="تصدير تقرير TXT كامل">
-                    <i class="fas fa-file-alt"></i>
-                </button>
-                <button class="action-icon-btn" onclick="exportAsHTMLReport()" title="حفظ الشبكة">
-                    <i class="fas fa-network-wired"></i>
-                </button>
-                <!-- Topology Export Dropdown -->
-                <div class="topology-export-wrap" id="topoExportWrap">
-                    <button class="action-icon-btn topo-main-btn" onclick="toggleTopoMenu()" title="تصدير خريطة الترابط المعرفي" id="topoExportBtn">
-                        <i class="fas fa-project-diagram"></i>
+                <!-- Combined Export Dropdown -->
+                <div class="export-dropdown-wrap" id="exportDropdownWrap">
+                    <button type="button" class="export-main-btn" onclick="toggleExportMenu(event)" id="exportDropdownBtn" title="تصدير النتائج والتقرير">
+                        <i class="fas fa-download"></i>
+                        <span>تصدير النتائج</span>
+                        <i class="fas fa-chevron-down chevron-icon"></i>
                     </button>
-                    <div class="topo-dropdown" id="topoDropdown">
-                        <div class="topo-dropdown-header">تصدير الطوبولوجيا المعرفية</div>
-                        <button class="topo-option" onclick="exportAsTopologyHTML(); toggleTopoMenu()">
+                    <div class="export-dropdown" id="exportDropdown">
+                        <div class="topo-dropdown-header">تصدير التقرير والبيانات</div>
+                        
+                        <button class="topo-option" onclick="exportAsJSON(); closeExportMenu()">
+                            <i class="fas fa-file-code"></i>
+                            <span>
+                                <strong>تصدير بصيغة JSON</strong>
+                                <small>ملف بيانات هيكلي كامل لجميع النتائج</small>
+                            </span>
+                        </button>
+                        <button class="topo-option" onclick="exportAsText(); closeExportMenu()">
+                            <i class="fas fa-file-alt"></i>
+                            <span>
+                                <strong>تصدير كتقرير نصي TXT</strong>
+                                <small>تلخيص نصي شامل ومقارنة الكيانات</small>
+                            </span>
+                        </button>
+                        <button class="topo-option" onclick="exportAsHTMLReport(); closeExportMenu()">
+                            <i class="fas fa-file-html"></i>
+                            <span>
+                                <strong>حفظ التقرير بصيغة HTML</strong>
+                                <small>صفحة ويب تفاعلية مدمجة للتقرير</small>
+                            </span>
+                        </button>
+                        
+                        <div class="dropdown-divider"></div>
+                        <div class="dropdown-subheader">شبكة العلاقات الطوبولوجية</div>
+                        
+                        <button class="topo-option" onclick="exportAsTopologyHTML(); closeExportMenu()">
                             <i class="fas fa-globe"></i>
                             <span>
                                 <strong>خريطة تفاعلية HTML</strong>
-                                <small>رسم بياني تفاعلي · vis-network · فيزياء ديناميكية</small>
+                                <small>رسم بياني مرئي لشبكة العلاقات بالفيزياء</small>
                             </span>
                         </button>
-                        <button class="topo-option" onclick="exportAsGraphML(); toggleTopoMenu()">
+                        <button class="topo-option" onclick="exportAsGraphML(); closeExportMenu()">
                             <i class="fas fa-sitemap"></i>
                             <span>
-                                <strong>GraphML (yEd / Gephi)</strong>
-                                <small>مفتوح بـ yEd · Gephi · Cytoscape · Neo4j</small>
+                                <strong>تصدير GraphML (yEd / Gephi)</strong>
+                                <small>متوافق مع برامج تحليل العلاقات المعقدة</small>
                             </span>
                         </button>
-                        <button class="topo-option" onclick="exportAsDOT(); toggleTopoMenu()">
-                            <i class="fas fa-share-alt"></i>
+                        <button class="topo-option" onclick="exportAsDOT(); closeExportMenu()">
+                            <i class="fas fa-project-diagram"></i>
                             <span>
-                                <strong>DOT / Graphviz (.gv)</strong>
-                                <small>مفتوح بـ Graphviz · Kroki.io · dot command</small>
+                                <strong>تصدير DOT / Graphviz (.gv)</strong>
+                                <small>توصيف رياضي لعقد العلاقات المعرفية</small>
                             </span>
                         </button>
                     </div>

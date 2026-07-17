@@ -384,26 +384,75 @@ kbd {
 .new-search-btn {
   display: flex; align-items: center; gap: var(--sp-2);
   padding: 0 var(--sp-4); height: 36px;
-  background: var(--bg-elevated); border: 1px solid var(--border-mid);
-  border-radius: var(--r-md); color: var(--text-secondary);
+  background: rgba(239, 68, 68, 0.08);
+  border: 1px solid rgba(239, 68, 68, 0.2);
+  border-radius: var(--r-md); color: #f87171;
   font-size: var(--text-xs); transition: all var(--t-fast);
+  cursor: pointer;
+  font-weight: 600;
 }
 .new-search-btn:hover {
-  border-color: var(--border-strong);
-  color: var(--text-primary); background: var(--bg-hover);
+  border-color: #ef4444;
+  color: #fff; background: #ef4444;
+  box-shadow: 0 0 12px rgba(239, 68, 68, 0.3);
 }
 
 .results-actions { display: flex; gap: var(--sp-2); align-items: center; }
-.action-icon-btn {
-  width: 36px; height: 36px;
-  background: var(--bg-elevated); border: 1px solid var(--border);
-  border-radius: var(--r-md); color: var(--text-muted); font-size: 13px;
-  display: flex; align-items: center; justify-content: center;
-  transition: all var(--t-fast);
+
+/* ─── CONSOLIDATED EXPORT DROPDOWN ───────────────────────────────────────── */
+.export-dropdown-wrap {
+  position: relative;
 }
-.action-icon-btn:hover {
-  background: var(--bg-hover); border-color: var(--border-mid);
-  color: var(--text-primary);
+.export-main-btn {
+  display: flex; align-items: center; gap: var(--sp-2);
+  padding: 0 var(--sp-4); height: 36px;
+  background: var(--bg-elevated); border: 1px solid var(--border-mid);
+  border-radius: var(--r-md); color: var(--text-secondary);
+  font-size: var(--text-xs); transition: all var(--t-fast);
+  cursor: pointer;
+}
+.export-main-btn:hover, .export-main-btn.open {
+  border-color: var(--accent, #c9a84c);
+  color: #fff; background: var(--bg-hover);
+}
+.export-main-btn .chevron-icon {
+  font-size: 10px;
+  margin-right: 4px;
+  transition: transform var(--t-fast);
+}
+.export-main-btn.open .chevron-icon {
+  transform: rotate(180deg);
+}
+.export-dropdown {
+  display: none;
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  width: 320px;
+  background: #0f1624;
+  border: 1px solid #1e2a3a;
+  border-radius: 12px;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.6), 0 0 0 1px rgba(201,168,76,0.08);
+  z-index: 1000;
+  overflow: hidden;
+  animation: topoFadeIn 0.15s ease;
+}
+.export-dropdown.open { display: block; }
+
+.dropdown-divider {
+  height: 1px;
+  background: #1e2a3a;
+  margin: 4px 0;
+}
+.dropdown-subheader {
+  padding: 8px 14px 4px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #c9a84c;
+  font-family: 'Cairo', sans-serif;
+  text-align: right;
 }
 
 /* ─── TOPOLOGY EXPORT DROPDOWN ───────────────────────────────────────── */
