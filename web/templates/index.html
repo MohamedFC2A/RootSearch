@@ -51,7 +51,7 @@
     <script src="/static/vis-network.min.js"></script>
     <script src="/static/marked.min.js"></script>
     <script src="/static/purify.min.js"></script>
-    <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="/static/style.css?v=5">
 </head>
 <body>
 <a href="#searchInput" class="skip-link">تخطي إلى البحث</a>
@@ -66,7 +66,7 @@
         <div class="brand">
             <span class="brand-icon">⬡</span>
             <span class="brand-name">RootSearch</span>
-            <span class="brand-version">v3</span>
+            <span class="brand-version">Demo 1 T</span>
         </div>
         <nav class="header-nav" aria-label="التنقل الرئيسي">
             <a href="#about" class="nav-link">حول المحرك</a>
@@ -94,7 +94,7 @@
 
             <form id="searchForm" class="search-form-premium" onsubmit="return handleSearch(event)" role="search" aria-label="نموذج البحث">
                 <!-- Row 1: Unified input capsule -->
-                <div class="search-input-capsule">
+                <div class="search-input-capsule" id="searchInputCapsule">
                     <i class="fas fa-search search-icon-inner" aria-hidden="true"></i>
                     <input
                         type="text"
@@ -109,8 +109,9 @@
                     <button type="button" class="clear-btn" id="clearBtn" onclick="clearSearch()" aria-label="مسح" style="display:none;">
                         <i class="fas fa-times" aria-hidden="true"></i>
                     </button>
-                    
-                    <!-- Sleek Minimal Model Dropdown Selector -->
+
+
+                    <!-- Model Dropdown -->
                     <div class="model-dropdown-wrap">
                         <button type="button" class="model-dropdown-trigger" id="modelDropdownTrigger" onclick="toggleModelDropdown()" aria-haspopup="listbox" aria-expanded="false">
                             <i class="fas fa-bolt dropdown-icon-active"></i>
@@ -133,20 +134,39 @@
                                 </div>
                             </li>
                         </ul>
-                        <!-- Hidden input to store selected value -->
                         <input type="hidden" name="searchModel" id="searchModelInput" value="fathom_s1">
+                    </div>
+
+                    <!-- K-Trust toggle: icon-only, before submit -->
+                    <div class="kt-wrap">
+                        <button
+                            type="button"
+                            class="kt-chip"
+                            id="kTrustedToggleBtn"
+                            onclick="toggleKTrustedMode()"
+                            aria-pressed="false"
+                            title="K-Trust — تفعيل وضع التحقق الفائق (Ctrl+K)"
+                        >
+                            <span class="kt-dot" id="ktDot"></span>
+                            <i class="fas fa-shield-alt kt-icon"></i>
+                        </button>
                     </div>
 
                     <button type="submit" class="search-submit-btn-embedded" id="searchSubmitBtn">
                         <span>ابحث</span>
                         <i class="fas fa-arrow-left" aria-hidden="true"></i>
                     </button>
+
                 </div>
 
                 <div class="search-meta">
-                    <span><i class="fas fa-database" aria-hidden="true"></i> <span id="engineCount">3</span> محركات</span>
+                    <span><i class="fas fa-database" aria-hidden="true"></i> <span id="engineCount">15</span> محركات</span>
                     <span><i class="fas fa-microchip" aria-hidden="true"></i> AI</span>
-                    <span class="kbd-hint"><kbd>Ctrl</kbd>+<kbd>K</kbd></span>
+                    <span class="kt-status-hint" id="ktStatusHint">
+                        <i class="fas fa-shield-alt"></i>
+                        <span id="ktStatusText">K-Trust: إيقاف</span>
+                        <span class="kbd-hint-inline"><kbd>Ctrl</kbd>+<kbd>K</kbd></span>
+                    </span>
                 </div>
             </form>
 
@@ -162,31 +182,85 @@
     <section class="results-section" id="resultsSection" style="display:none">
         <div class="results-topbar">
             <div class="results-meta">
-                <span class="results-count">تم العثور على <span id="resultsCount">صفر</span> شيء في <span id="searchTime">0.0</span>ث</span>
+                <!-- During search, this is visible -->
+                <span id="searchActiveStatus" class="search-active-status">
+                    <i class="fas fa-circle-notch fa-spin"></i> جاري التنقيب والتحليل الدلالي... 
+                    <span id="liveSearchTimer" class="timer-badge">0.0</span>ث
+                </span>
+                <!-- After search, this becomes visible -->
+                <span id="searchResultsCountContainer" class="results-count" style="display:none">
+                    تم العثور على <span id="resultsCount">صفر</span> مصدر في <span id="searchTime">0.0</span>ث
+                </span>
                 <button class="new-search-btn" id="newSearchBtn" onclick="resetSearch()">
                     <i class="fas fa-redo-alt"></i> بحث جديد
                 </button>
             </div>
             <div class="results-actions">
-                <button class="action-icon-btn" onclick="exportAsJSON()" title="تصدير JSON"><i class="fas fa-file-code"></i></button>
-                <button class="action-icon-btn" onclick="exportAsText()" title="تصدير نص"><i class="fas fa-file-alt"></i></button>
-                <button class="action-icon-btn" onclick="exportAsHTMLReport()" title="حفظ الشبكة"><i class="fas fa-network-wired"></i></button>
+                <button class="action-icon-btn" onclick="exportAsJSON()" title="تصدير JSON">
+                    <i class="fas fa-file-code"></i>
+                </button>
+                <button class="action-icon-btn" onclick="exportAsText()" title="تصدير تقرير TXT كامل">
+                    <i class="fas fa-file-alt"></i>
+                </button>
+                <button class="action-icon-btn" onclick="exportAsHTMLReport()" title="حفظ الشبكة">
+                    <i class="fas fa-network-wired"></i>
+                </button>
+                <!-- Topology Export Dropdown -->
+                <div class="topology-export-wrap" id="topoExportWrap">
+                    <button class="action-icon-btn topo-main-btn" onclick="toggleTopoMenu()" title="تصدير خريطة الترابط المعرفي" id="topoExportBtn">
+                        <i class="fas fa-project-diagram"></i>
+                    </button>
+                    <div class="topo-dropdown" id="topoDropdown">
+                        <div class="topo-dropdown-header">تصدير الطوبولوجيا المعرفية</div>
+                        <button class="topo-option" onclick="exportAsTopologyHTML(); toggleTopoMenu()">
+                            <i class="fas fa-globe"></i>
+                            <span>
+                                <strong>خريطة تفاعلية HTML</strong>
+                                <small>رسم بياني تفاعلي · vis-network · فيزياء ديناميكية</small>
+                            </span>
+                        </button>
+                        <button class="topo-option" onclick="exportAsGraphML(); toggleTopoMenu()">
+                            <i class="fas fa-sitemap"></i>
+                            <span>
+                                <strong>GraphML (yEd / Gephi)</strong>
+                                <small>مفتوح بـ yEd · Gephi · Cytoscape · Neo4j</small>
+                            </span>
+                        </button>
+                        <button class="topo-option" onclick="exportAsDOT(); toggleTopoMenu()">
+                            <i class="fas fa-share-alt"></i>
+                            <span>
+                                <strong>DOT / Graphviz (.gv)</strong>
+                                <small>مفتوح بـ Graphviz · Kroki.io · dot command</small>
+                            </span>
+                        </button>
+                    </div>
+                </div>
             </div>
+
         </div>
 
-        <!-- AI QUICK OVERVIEW -->
+        <!-- AI DIRECT ANSWER CAPSULE -->
         <div class="ai-overview-capsule" id="aiOverviewCapsule" style="display:none;">
             <div class="ai-overview-header">
                 <div class="ai-title-row">
-                    <i class="fas fa-sparkles ai-pulse-icon"></i>
-                    <h3>إجابة الذكاء الاصطناعي الفورية (RootSearch AI)</h3>
+                    <i class="fas fa-bolt ai-pulse-icon"></i>
+                    <div>
+                        <h3>إجابة الذكاء الاصطناعي الفورية</h3>
+                        <p class="ai-subtitle">إجابة مرجعية مباشرة · مدعومة بمصادر موثقة</p>
+                    </div>
                 </div>
-                <span class="ai-badge">GLM-4 / Gemini</span>
+                <div class="ai-header-actions">
+                    <span class="ai-badge" id="aiModelBadge">RootSearch AI</span>
+                    <button class="ai-toggle-btn" id="aiToggleBtn" onclick="toggleAiCapsule()" title="طي/توسيع">
+                        <i class="fas fa-chevron-up"></i>
+                    </button>
+                </div>
             </div>
             <div class="ai-overview-body" id="aiOverviewBody">
                 <!-- Content injected by JS -->
             </div>
         </div>
+
 
         <!-- TABS -->
         <nav class="results-tabs" role="tablist" aria-label="عرض النتائج">
@@ -342,7 +416,7 @@
 
 <!-- Footer -->
 <footer class="site-footer">
-    <p>RootSearch v3.0 — Deep Intelligence Search Engine</p>
+    <p>RootSearch Demo 1 T — Deep Intelligence Search Engine</p>
     <p class="footer-sub">تحليل بالذكاء الاصطناعي · شجرة بحث حية · استخراج مصادر متقدم</p>
 </footer>
 
@@ -382,6 +456,23 @@
     </div>
 </div>
 
+<!-- Source Detail Modal -->
+<div id="sourceDetailModal" class="modal-overlay" style="display:none" role="dialog" aria-modal="true" aria-labelledby="sourceModalTitle">
+    <div class="modal-box source-detail-box">
+        <div class="modal-header">
+            <h3 id="sourceModalTitle"><i class="fas fa-file-alt"></i> تفاصيل المصدر المعرفي</h3>
+            <button class="modal-close" onclick="closeSourceDetailModal()" aria-label="إغلاق">&times;</button>
+        </div>
+        <div class="modal-body" id="sourceDetailModalBody">
+            <!-- Content injected by JS -->
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="closeSourceDetailModal()">إغلاق</button>
+            <a id="sourceModalOpenLink" href="#" target="_blank" rel="noopener noreferrer" class="btn btn-primary"><i class="fas fa-external-link-alt"></i> زيارة الموقع الأصلي</a>
+        </div>
+    </div>
+</div>
+
 <!-- Category Filter Bottom Sheet (Mobile) -->
 <div class="node-sheet" id="filterSheet" aria-hidden="true">
     <div class="sheet-handle"></div>
@@ -393,6 +484,7 @@
 </div>
 <div class="sheet-backdrop" id="filterSheetBackdrop" onclick="closeFilterSheet()"></div>
 
-<script src="/static/script.js"></script>
+<script src="/static/config.js"></script>
+<script src="/static/script.js?v=5"></script>
 </body>
 </html>
