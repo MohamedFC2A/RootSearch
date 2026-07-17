@@ -563,7 +563,7 @@ async def api_search_stream(
                     }))
                     try:
                         scraped = await asyncio.wait_for(
-                            engine.scraper.scrape_url(res.url, fallback_snippet=res.snippet),
+                            engine.scraper.scrape_url(res.url, fallback_snippet=res.snippet, parent_metadata={"relevance_score": res.relevance_score}),
                             timeout=6.0
                         )
                         if scraped and scraped.get("content"):
@@ -574,7 +574,12 @@ async def api_search_stream(
                                 "extraction_method": scraped.get("extraction_method", "trafilatura"),
                                 "resolved_ip": scraped.get("resolved_ip", ""),
                                 "cb_state": scraped.get("cb_state", "closed"),
+                                "url": res.url,
+                                "title": res.title,
+                                "snippet": res.snippet,
+                                "relevance_score": res.relevance_score,
                             })
+                            # Keep success event status update
                             event_queue.put_nowait(("node_status_update", {
                                 "nodeId": nid,
                                 "status": "success",
@@ -582,15 +587,43 @@ async def api_search_stream(
                                 "metadata": res.metadata,
                             }))
                         else:
+                            from core.cognitive import DomainCredibilityScorer
+                            scorer = DomainCredibilityScorer()
+                            weight = scorer.get_domain_weight(res.url)
+                            tier_label = "المستوى 1 (رسمي/حكومي/تعليمي)" if weight == 1.0 else ("المستوى 2 (موسوعي/إخباري موثق)" if weight == 0.7 else "مصدر عام")
+                            res.metadata.update({
+                                "scraped": False,
+                                "url": res.url,
+                                "title": res.title,
+                                "snippet": res.snippet,
+                                "relevance_score": res.relevance_score,
+                                "credibility_tier": tier_label,
+                                "credibility_weight": weight
+                            })
                             event_queue.put_nowait(("node_status_update", {
                                 "nodeId": nid,
                                 "status": "failed",
                                 "label": f"فشل استخراج المحتوى — {domain}",
+                                "metadata": res.metadata,
                             }))
                     except Exception:
+                        from core.cognitive import DomainCredibilityScorer
+                        scorer = DomainCredibilityScorer()
+                        weight = scorer.get_domain_weight(res.url)
+                        tier_label = "المستوى 1 (رسمي/حكومي/تعليمي)" if weight == 1.0 else ("المستوى 2 (موسوعي/إخباري موثق)" if weight == 0.7 else "مصدر عام")
+                        res.metadata.update({
+                            "scraped": False,
+                            "url": res.url,
+                            "title": res.title,
+                            "snippet": res.snippet,
+                            "relevance_score": res.relevance_score,
+                            "credibility_tier": tier_label,
+                            "credibility_weight": weight
+                        })
                         event_queue.put_nowait(("node_status_update", {
                             "nodeId": nid, "status": "failed",
                             "label": f"انتهت المهلة — {domain}",
+                            "metadata": res.metadata,
                         }))
                     return res
 

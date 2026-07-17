@@ -547,26 +547,80 @@ function scrollTreeToActiveStage(stage) {
 
 function resetLiveTree() {
     treeNodes.clear();
-    const cols = ['trigger', 'source_discovery', 'extraction', 'semantic_analysis', 'verification'];
-    cols.forEach(s => {
-        const col = document.getElementById(`col_${s}`);
-        if (col) col.innerHTML = '';
-    });
-    const status = document.getElementById('treeStatus');
-    if (status) status.textContent = 'Initialising pipeline...';
+    const container = document.getElementById('liveTreeCanvas');
+    if (!container) return;
 
-    // Reset stage header
+    if (typeof vis === 'undefined') {
+        container.innerHTML = `<div style="padding:20px;color:var(--text-muted);text-align:center;">مكتبة رسم الشبكات (vis.js) غير متوفرة.</div>`;
+        return;
+    }
+
+    liveTreeNodes = new vis.DataSet();
+    liveTreeEdges = new vis.DataSet();
+
+    const options = {
+        nodes: {
+            font: {
+                face: 'Cairo, system-ui, sans-serif',
+                size: 11,
+                color: '#E2E8F0'
+            },
+            borderWidth: 2,
+            shadow: { enabled: true, size: 6, color: 'rgba(0,0,0,0.5)' }
+        },
+        edges: {
+            color: { color: '#273549', highlight: '#c9a84c', hover: '#c9a84c' },
+            arrows: { to: { enabled: true, scaleFactor: 0.8 } },
+            width: 1.5,
+            smooth: { type: 'cubicBezier', forceDirection: 'horizontal', roundness: 0.6 }
+        },
+        layout: {
+            hierarchical: {
+                enabled: true,
+                direction: 'LR', // Left-to-Right structure
+                sortMethod: 'directed',
+                nodeSpacing: 50,
+                levelSpacing: 160
+            }
+        },
+        physics: {
+            enabled: false
+        },
+        interaction: {
+            hover: true,
+            zoomView: true,
+            dragView: true,
+            selectable: true
+        }
+    };
+
+    liveTreeNetwork = new vis.Network(container, { nodes: liveTreeNodes, edges: liveTreeEdges }, options);
+    
+    // Node selection opens the sheet
+    liveTreeNetwork.on('click', function(params) {
+        if (params.nodes && params.nodes.length > 0) {
+            const nodeId = params.nodes[0];
+            const nodeData = liveTreeNodes.get(nodeId);
+            if (nodeData && nodeData.customData) {
+                openNodeSheet(nodeId, nodeData.customData.stage, nodeData.customData.status, nodeData.customData.label, nodeData.customData.metadata);
+            }
+        }
+    });
+
+    const status = document.getElementById('treeStatus');
+    if (status) status.textContent = 'جاري تهيئة خط الأنابيب...';
+
+    // Reset stage headers
     document.querySelectorAll('.stage-header-item').forEach(el => {
         el.classList.remove('active', 'done');
     });
 
-    // Update badge
+    // Show badge
     const badge = document.getElementById('treeLiveBadge');
     if (badge) badge.style.display = 'flex';
 }
 
 function activateStageHeader(stage) {
-    // mark previous as done
     const stages = ['trigger', 'source_discovery', 'extraction', 'semantic_analysis', 'verification'];
     const idx = stages.indexOf(stage);
     stages.forEach((s, i) => {
@@ -579,97 +633,137 @@ function activateStageHeader(stage) {
 }
 
 function createTreeNode(nodeId, stage, status, label, metadata, parentId) {
-    const col = document.getElementById(`col_${stage}`);
-    if (!col) return null;
+    if (!liveTreeNodes) return null;
+    if (liveTreeNodes.get(nodeId)) return null;
 
-    const node = document.createElement('div');
-    node.className = 'tree-node';
-    node.dataset.nodeId = nodeId;
-    node.dataset.status = status;
-    node.dataset.stage = stage;
+    // Determine level, shape, and styling based on stage & status
+    let color = { background: '#1e293b', border: '#475569' };
+    let shape = 'dot';
+    let level = 0;
 
-    const initialMicro = status === 'pending' ? 'جاري التجهيز للعملية...' : '—';
-    node.innerHTML = `
-        <div class="node-status-row">
-            <span class="node-status-dot"></span>
-            <span class="node-status-tag">${STAGE_LABELS[status] || status}</span>
-        </div>
-        <div class="node-label">${escapeHtml(label)}</div>
-        <div class="node-microcopy" id="micro_${nodeId}">${initialMicro}</div>
-    `;
+    if (stage === 'trigger') {
+        color = { background: '#6d28d9', border: '#a78bfa' }; // purple
+        shape = 'ellipse';
+        level = 0;
+    } else if (nodeId.startsWith('subquery_')) {
+        color = { background: '#1e3a8a', border: '#3b82f6' }; // blue
+        shape = 'box';
+        level = 1;
+    } else if (nodeId.startsWith('engine_')) {
+        color = { background: '#311042', border: '#c084fc' }; // violet/indigo
+        shape = 'box';
+        level = 2;
+    } else if (stage === 'source_discovery') {
+        color = { background: '#1e293b', border: '#64748b' };
+        shape = 'dot';
+        level = 2;
+    } else if (stage === 'extraction') {
+        color = { background: '#022c22', border: '#10b981' }; // green
+        shape = 'dot';
+        level = 3;
+    } else if (stage === 'semantic_analysis') {
+        color = { background: '#581c87', border: '#c084fc' };
+        shape = 'ellipse';
+        level = 4;
+    } else if (stage === 'verification') {
+        color = { background: '#701a75', border: '#f472b6' };
+        shape = 'ellipse';
+        level = 5;
+    }
 
-    // Click opens bottom sheet
-    node.addEventListener('click', () => openNodeSheet(nodeId, stage, status, label, metadata));
+    // Status adjustments
+    if (status === 'fetching' || status === 'processing') {
+        color = { background: '#78350f', border: '#fbbf24' }; // amber
+    } else if (status === 'failed') {
+        color = { background: '#7f1d1d', border: '#ef4444' }; // red
+    } else if (status === 'success') {
+        color.border = '#10b981';
+    }
 
-    col.appendChild(node);
-    treeNodes.set(nodeId, node);
+    let cleanLabel = label;
+    if (cleanLabel.length > 25) {
+        cleanLabel = cleanLabel.substring(0, 22) + '...';
+    }
+
+    liveTreeNodes.add({
+        id: nodeId,
+        label: cleanLabel,
+        level: level,
+        shape: shape,
+        color: color,
+        customData: { stage, status, label, metadata }
+    });
+
+    // Add connection edges
+    if (parentId && liveTreeNodes.get(parentId)) {
+        liveTreeEdges.add({ from: parentId, to: nodeId });
+    } else if (level > 0) {
+        let fallback = 'trigger';
+        if (level === 2 && nodeId.startsWith('engine_')) {
+            const parts = nodeId.split('_');
+            fallback = `subquery_${parts[1]}`;
+        } else if (level === 3) {
+            const discNode = metadata?.discovery_node;
+            if (discNode && liveTreeNodes.get(discNode)) {
+                fallback = discNode;
+            } else {
+                fallback = 'source_discovery';
+            }
+        } else if (level === 4) {
+            fallback = 'extraction';
+        } else if (level === 5) {
+            fallback = 'semantic_analysis';
+        }
+
+        if (liveTreeNodes.get(fallback)) {
+            liveTreeEdges.add({ from: fallback, to: nodeId });
+        }
+    }
+
+    // Trace maps & DOM compatibility (just in case other scripts reference treeNodes map)
+    treeNodes.set(nodeId, { dataset: { stage, status } });
 
     activateStageHeader(stage);
-    scrollTreeToActiveStage(stage);
-    return node;
+    return null;
 }
 
 function updateTreeNode(nodeId, status, label, metadata, parentId) {
-    let node = treeNodes.get(nodeId);
+    if (!liveTreeNodes) return;
+    const node = liveTreeNodes.get(nodeId);
     if (!node) return;
 
-    node.dataset.status = status;
+    let color = node.color;
+    if (status === 'fetching' || status === 'processing') {
+        color = { background: '#78350f', border: '#fbbf24' };
+    } else if (status === 'failed') {
+        color = { background: '#7f1d1d', border: '#ef4444' };
+    } else if (status === 'success') {
+        color = { background: node.color.background, border: '#10b981' };
+    }
 
-    const statusTag = node.querySelector('.node-status-tag');
-    if (statusTag) statusTag.textContent = STAGE_LABELS[status] || status;
+    let cleanLabel = label;
+    if (cleanLabel.length > 25) {
+        cleanLabel = cleanLabel.substring(0, 22) + '...';
+    }
 
-    const labelEl = node.querySelector('.node-label');
-    if (labelEl) labelEl.textContent = label;
-
-    const micro = node.querySelector('.node-microcopy');
-    if (micro) {
-        if (status === 'failed') {
-            const err = metadata?.error || metadata?.reason || 'فشلت العملية';
-            micro.textContent = `خطأ: ${err}`;
-        } else if (status === 'pending') {
-            micro.textContent = 'جاري التجهيز للعملية...';
-        } else if (metadata) {
-            const parts = [];
-            if (metadata.words)   parts.push(`${metadata.words.toLocaleString()} كلمة`);
-            if (metadata.count !== undefined) parts.push(`تم العثور على ${formatScaryCount(metadata.count)} مصدر`);
-            if (metadata.method)  parts.push(metadata.method);
-            if (metadata.cb_state && metadata.cb_state !== 'closed') parts.push(`CB: ${metadata.cb_state}`);
-            micro.textContent = parts.join(' · ') || '—';
-        } else {
-            micro.textContent = label.length > 40 ? label.slice(0, 40) + '…' : label;
+    liveTreeNodes.update({
+        id: nodeId,
+        label: cleanLabel,
+        color: color,
+        customData: {
+            stage: node.customData?.stage || 'general',
+            status: status,
+            label: label,
+            metadata: { ...node.customData?.metadata, ...metadata }
         }
-    }
+    });
 
-    // Add retry button on failed nodes with can_retry
-    if (status === 'failed' && metadata?.can_retry) {
-        if (!node.querySelector('.node-retry-btn')) {
-            const retryBtn = document.createElement('button');
-            retryBtn.className = 'node-retry-btn';
-            retryBtn.innerHTML = '<i class="fas fa-redo-alt"></i> إعادة المحاولة';
-            retryBtn.addEventListener('click', e => {
-                e.stopPropagation();
-                showToast('جاري إعادة تشغيل البحث...', 'info');
-                handleSearch(null);
-            });
-            node.appendChild(retryBtn);
-        }
-    }
-
-    // Mark stage header
-    if (status === 'success' || status === 'done') {
-        const stageHeader = document.querySelector(`.stage-header-item[data-stage="${node.dataset.stage}"]`);
-        if (stageHeader) stageHeader.classList.add('done');
-    }
-
-    // Smooth scroll to this node's stage
-    if (node.dataset.stage) {
-        scrollTreeToActiveStage(node.dataset.stage);
+    if (['fetching','processing','success'].includes(status)) {
+        const treeStatus = document.getElementById('treeStatus');
+        if (treeStatus) treeStatus.textContent = label;
     }
 }
 
-
-
-// ─── BOTTOM SHEET ─────────────────────────────────────────────
 function openNodeSheet(nodeId, stage, status, label, metadata) {
     const sheet = document.getElementById('nodeSheet');
     const content = document.getElementById('sheetContent');
@@ -683,11 +777,73 @@ function openNodeSheet(nodeId, stage, status, label, metadata) {
 
     let metaHTML = '';
     if (metadata) {
-        metaHTML = Object.entries(metadata)
-            .filter(([k, v]) => v !== undefined && v !== null && v !== '')
-            .map(([k, v]) => `<tr><td style="color:var(--text-muted);padding:4px 8px 4px 0">${escapeHtml(k)}</td><td style="font-family:'JetBrains Mono',monospace;font-size:12px">${escapeHtml(String(v))}</td></tr>`)
-            .join('');
-        if (metaHTML) metaHTML = `<table style="width:100%;border-collapse:collapse;margin-top:12px">${metaHTML}</table>`;
+        if (metadata.url) {
+            const wordsCount = metadata.words || metadata.word_count || 0;
+            const extractionMethod = metadata.method || metadata.extraction_method || 'N/A';
+            const credibilityTier = metadata.credibility_tier || 'مصدر عام';
+            const credibilityWeight = metadata.credibility_weight !== undefined ? metadata.credibility_weight : 0.3;
+            const relevanceScore = metadata.relevance_score !== undefined ? metadata.relevance_score : 0.5;
+            const cbState = metadata.cb_state || 'closed';
+            const resolvedIp = metadata.resolved_ip || '127.0.0.1';
+
+            let badgeColor = '#94a3b8';
+            let badgeBg = 'rgba(148, 163, 184, 0.1)';
+            if (credibilityWeight === 1.0) {
+                badgeColor = '#fbbf24';
+                badgeBg = 'rgba(251, 191, 36, 0.1)';
+            } else if (credibilityWeight === 0.7) {
+                badgeColor = '#10b981';
+                badgeBg = 'rgba(16, 185, 129, 0.1)';
+            }
+
+            const relevancePercent = Math.round(relevanceScore * 100);
+
+            metaHTML = `
+                <div class="source-detail-card" style="margin-top: var(--sp-4);">
+                    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--sp-4);background:rgba(255,255,255,0.02);padding:12px;border-radius:var(--r-md);border:1px solid var(--border)">
+                        <div style="display:flex;align-items:center;gap:8px;">
+                            <i class="fas fa-globe" style="color:var(--accent);font-size:16px;"></i>
+                            <a href="${metadata.url}" target="_blank" style="color:var(--text);font-weight:600;text-decoration:none;font-size:13px;word-break:break-all;">
+                                ${escapeHtml(metadata.url.replace(/https?:\/\//, '').split('/')[0])}
+                                <i class="fas fa-external-link-alt" style="font-size:10px;margin-right:4px;"></i>
+                            </a>
+                        </div>
+                        <span class="cred-badge" style="color:${badgeColor};background:${badgeBg};border:1px solid ${badgeColor}33;padding:4px 8px;border-radius:30px;font-size:10px;font-weight:600;">
+                            ${credibilityTier}
+                        </span>
+                    </div>
+
+                    <h3 style="font-size:16px;font-weight:700;color:var(--text);margin-bottom:12px;line-height:1.5;">${escapeHtml(metadata.title || label)}</h3>
+
+                    <div class="details-snippet-box" style="background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r-md);padding:14px;margin-bottom:16px;max-height:180px;overflow-y:auto;font-size:12.5px;color:var(--text-muted);line-height:1.6;direction:rtl;text-align:right;">
+                        ${escapeHtml(metadata.snippet || 'لا يوجد مقتطف نصي متاح.')}
+                    </div>
+
+                    <div style="margin-bottom:20px;">
+                        <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:6px;">
+                            <span style="color:var(--text-muted)">نسبة المطابقة والموثوقية:</span>
+                            <span style="color:var(--accent);font-weight:bold;">${relevancePercent}%</span>
+                        </div>
+                        <div style="width:100%;height:6px;background:var(--border);border-radius:10px;overflow:hidden;">
+                            <div style="width:${relevancePercent}%;height:100%;background:linear-gradient(90deg, var(--accent), #a78bfa);border-radius:10px;box-shadow:0 0 6px var(--accent);"></div>
+                        </div>
+                    </div>
+
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;font-size:11px;color:var(--text-muted);background:rgba(255,255,255,0.01);padding:12px;border-radius:var(--r-md);border:1px solid var(--border)">
+                        <div><i class="fas fa-file-alt" style="margin-left:6px;"></i> الكلمات المستخرجة: <strong style="color:var(--text)">${wordsCount.toLocaleString()} كلمة</strong></div>
+                        <div><i class="fas fa-robot" style="margin-left:6px;"></i> أداة الاستخراج: <strong style="color:var(--text)">${escapeHtml(extractionMethod)}</strong></div>
+                        <div><i class="fas fa-network-wired" style="margin-left:6px;"></i> خادم الويب (IP): <strong style="color:var(--text)">${escapeHtml(resolvedIp)}</strong></div>
+                        <div><i class="fas fa-shield-halved" style="margin-left:6px;"></i> حالة الحظر (Circuit): <strong style="color:var(--text)">${escapeHtml(cbState)}</strong></div>
+                    </div>
+                </div>
+            `;
+        } else {
+            metaHTML = Object.entries(metadata)
+                .filter(([k, v]) => v !== undefined && v !== null && v !== '')
+                .map(([k, v]) => `<tr><td style="color:var(--text-muted);padding:4px 8px 4px 0">${escapeHtml(k)}</td><td style="font-family:'JetBrains Mono',monospace;font-size:12px">${escapeHtml(String(v))}</td></tr>`)
+                .join('');
+            if (metaHTML) metaHTML = `<table style="width:100%;border-collapse:collapse;margin-top:12px">${metaHTML}</table>`;
+        }
     }
 
     content.innerHTML = `

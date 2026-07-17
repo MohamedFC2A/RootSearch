@@ -685,7 +685,8 @@ class DeepScraper:
     # ── Public API ─────────────────────────────────────────────────
 
     async def scrape_url(self, url: str,
-                         fallback_snippet: str = "") -> Optional[Dict[str, Any]]:
+                         fallback_snippet: str = "",
+                         parent_metadata: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
         """Scrape a single URL — returns extracted content dict or None."""
         domain = urlparse(url).netloc or url
         nid = self._get_node_id(url)
@@ -741,6 +742,11 @@ class DeepScraper:
 
             extracted["resolved_ip"] = await self._resolve_ip_async(urlparse(url).hostname)
 
+            from core.cognitive import DomainCredibilityScorer
+            scorer = DomainCredibilityScorer()
+            weight = scorer.get_domain_weight(url)
+            tier_label = "المستوى 1 (رسمي/حكومي/تعليمي)" if weight == 1.0 else ("المستوى 2 (موسوعي/إخباري موثق)" if weight == 0.7 else "مصدر عام")
+
             self._emit("node_status_update", {
                 "nodeId": nid,
                 "status": "success",
@@ -749,6 +755,13 @@ class DeepScraper:
                     "method": extracted.get("extraction_method", ""),
                     "words": extracted["word_count"],
                     "cb_state": extracted["cb_state"],
+                    "url": url,
+                    "title": extracted.get("title", "") or domain,
+                    "snippet": fallback_snippet,
+                    "relevance_score": parent_metadata.get("relevance_score", 0.5) if parent_metadata else 0.5,
+                    "credibility_tier": tier_label,
+                    "credibility_weight": weight,
+                    "scraped": True
                 },
             })
             return extracted
@@ -857,7 +870,11 @@ class DeepScraper:
 
                 scraped = None
                 try:
-                    scraped = await self.scrape_url(url, fallback_snippet=res_obj.snippet)
+                    scraped = await self.scrape_url(
+                        url,
+                        fallback_snippet=res_obj.snippet if res_obj else "",
+                        parent_metadata={"relevance_score": res_obj.relevance_score if res_obj else 0.5}
+                    )
                 except Exception as e:
                     self._emit("node_status_update", {
                         "nodeId": node_id,
