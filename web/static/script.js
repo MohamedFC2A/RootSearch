@@ -580,7 +580,7 @@ function resetLiveTree() {
                 direction: 'LR', // Left-to-Right structure
                 sortMethod: 'directed',
                 nodeSpacing: 50,
-                levelSpacing: 160
+                levelSeparation: 160
             }
         },
         physics: {
