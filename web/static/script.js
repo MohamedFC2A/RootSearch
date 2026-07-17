@@ -362,10 +362,30 @@ function switchTab(tabId) {
 function initSearchInput() {
     const input = document.getElementById('searchInput');
     const clearBtn = document.getElementById('clearBtn');
+    const submitBtn = document.getElementById('searchSubmitBtn');
     if (!input) return;
-    input.addEventListener('input', () => {
-        if (clearBtn) clearBtn.style.display = input.value ? 'flex' : 'none';
-    });
+
+    function updateSubmitState() {
+        const query = input.value.trim();
+        if (clearBtn) clearBtn.style.display = query ? 'flex' : 'none';
+        
+        if (submitBtn && !submitBtn.classList.contains('loading-active')) {
+            if (query.length < 20) {
+                submitBtn.disabled = true;
+                submitBtn.style.opacity = '0.4';
+                submitBtn.style.cursor = 'not-allowed';
+                submitBtn.style.pointerEvents = 'none';
+            } else {
+                submitBtn.disabled = false;
+                submitBtn.style.opacity = '1.0';
+                submitBtn.style.cursor = 'pointer';
+                submitBtn.style.pointerEvents = 'auto';
+            }
+        }
+    }
+
+    input.addEventListener('input', updateSubmitState);
+    updateSubmitState(); // Initial check
 }
 
 function clearSearch() {
@@ -411,10 +431,27 @@ function setSearchButtonLoading(isLoading) {
         btn.classList.add('loading-active');
         const isMobile = window.innerWidth <= 600;
         btn.innerHTML = `<i class="fas fa-spinner fa-spin"></i>${isMobile ? '' : ' <span>جاري البحث...</span>'}`;
+        btn.style.opacity = '0.7';
+        btn.style.cursor = 'not-allowed';
+        btn.style.pointerEvents = 'none';
     } else {
-        btn.disabled = false;
         btn.classList.remove('loading-active');
         btn.innerHTML = `<span>ابحث</span><i class="fas fa-arrow-left" aria-hidden="true"></i>`;
+        
+        // Restore dynamic state based on length
+        const input = document.getElementById('searchInput');
+        const query = input ? input.value.trim() : '';
+        if (query.length < 20) {
+            btn.disabled = true;
+            btn.style.opacity = '0.4';
+            btn.style.cursor = 'not-allowed';
+            btn.style.pointerEvents = 'none';
+        } else {
+            btn.disabled = false;
+            btn.style.opacity = '1.0';
+            btn.style.cursor = 'pointer';
+            btn.style.pointerEvents = 'auto';
+        }
     }
 }
 
@@ -446,8 +483,8 @@ function handleSearch(e) {
     if (e) e.preventDefault();
     const input = document.getElementById('searchInput');
     const query = input?.value?.trim();
-    if (!query || query.length < 35) { 
-        showToast('الرجاء كتابة استعلام بحث مفصل ومفهوم لا يقل عن 35 حرفاً.', 'error'); 
+    if (!query || query.length < 20) { 
+        showToast('الرجاء كتابة استعلام بحث مفصل ومفهوم لا يقل عن 20 حرفاً.', 'error'); 
         return false; 
     }
 
@@ -547,6 +584,12 @@ function scrollTreeToActiveStage(stage) {
 
 function resetLiveTree() {
     treeNodes.clear();
+    const columns = ['col_trigger', 'col_source_discovery', 'col_extraction', 'col_semantic_analysis', 'col_verification'];
+    columns.forEach(id => {
+        const col = document.getElementById(id);
+        if (col) col.innerHTML = '';
+    });
+
     const container = document.getElementById('liveTreeCanvas');
     if (!container) return;
 
@@ -633,130 +676,214 @@ function activateStageHeader(stage) {
 }
 
 function createTreeNode(nodeId, stage, status, label, metadata, parentId) {
-    if (!liveTreeNodes) return null;
-    if (liveTreeNodes.get(nodeId)) return null;
+    // 1. Create HTML Node element in columns
+    const col = document.getElementById(`col_${stage}`);
+    if (col) {
+        let node = document.getElementById(`html_node_${nodeId}`);
+        if (!node) {
+            node = document.createElement('div');
+            node.className = 'tree-node';
+            node.id = `html_node_${nodeId}`;
+            node.dataset.nodeId = nodeId;
+            node.dataset.status = status;
+            node.dataset.stage = stage;
 
-    // Determine level, shape, and styling based on stage & status
-    let color = { background: '#1e293b', border: '#475569' };
-    let shape = 'dot';
-    let level = 0;
+            const initialMicro = status === 'pending' ? 'جاري التجهيز للعملية...' : '—';
+            node.innerHTML = `
+                <div class="node-status-row">
+                    <span class="node-status-dot"></span>
+                    <span class="node-status-tag">${STAGE_LABELS[status] || status}</span>
+                </div>
+                <div class="node-label">${escapeHtml(label)}</div>
+                <div class="node-microcopy" id="micro_${nodeId}">${initialMicro}</div>
+            `;
 
-    if (stage === 'trigger') {
-        color = { background: '#6d28d9', border: '#a78bfa' }; // purple
-        shape = 'ellipse';
-        level = 0;
-    } else if (nodeId.startsWith('subquery_')) {
-        color = { background: '#1e3a8a', border: '#3b82f6' }; // blue
-        shape = 'box';
-        level = 1;
-    } else if (nodeId.startsWith('engine_')) {
-        color = { background: '#311042', border: '#c084fc' }; // violet/indigo
-        shape = 'box';
-        level = 2;
-    } else if (stage === 'source_discovery') {
-        color = { background: '#1e293b', border: '#64748b' };
-        shape = 'dot';
-        level = 2;
-    } else if (stage === 'extraction') {
-        color = { background: '#022c22', border: '#10b981' }; // green
-        shape = 'dot';
-        level = 3;
-    } else if (stage === 'semantic_analysis') {
-        color = { background: '#581c87', border: '#c084fc' };
-        shape = 'ellipse';
-        level = 4;
-    } else if (stage === 'verification') {
-        color = { background: '#701a75', border: '#f472b6' };
-        shape = 'ellipse';
-        level = 5;
+            // Click opens bottom sheet
+            node.addEventListener('click', () => openNodeSheet(nodeId, stage, status, label, metadata));
+            col.appendChild(node);
+            treeNodes.set(nodeId, node);
+        }
     }
 
-    // Status adjustments
-    if (status === 'fetching' || status === 'processing') {
-        color = { background: '#78350f', border: '#fbbf24' }; // amber
-    } else if (status === 'failed') {
-        color = { background: '#7f1d1d', border: '#ef4444' }; // red
-    } else if (status === 'success') {
-        color.border = '#10b981';
-    }
+    // 2. Also add to vis.js dataset for network graph
+    if (liveTreeNodes && !liveTreeNodes.get(nodeId)) {
+        let color = { background: '#1e293b', border: '#475569' };
+        let shape = 'dot';
+        let level = 0;
 
-    let cleanLabel = label;
-    if (cleanLabel.length > 25) {
-        cleanLabel = cleanLabel.substring(0, 22) + '...';
-    }
+        if (stage === 'trigger') {
+            color = { background: '#6d28d9', border: '#a78bfa' }; // purple
+            shape = 'ellipse';
+            level = 0;
+        } else if (nodeId.startsWith('subquery_')) {
+            color = { background: '#1e3a8a', border: '#3b82f6' }; // blue
+            shape = 'box';
+            level = 1;
+        } else if (nodeId.startsWith('engine_')) {
+            color = { background: '#311042', border: '#c084fc' }; // violet/indigo
+            shape = 'box';
+            level = 2;
+        } else if (stage === 'source_discovery') {
+            color = { background: '#1e293b', border: '#64748b' };
+            shape = 'dot';
+            level = 2;
+        } else if (stage === 'extraction') {
+            color = { background: '#022c22', border: '#10b981' }; // green
+            shape = 'dot';
+            level = 3;
+        } else if (stage === 'semantic_analysis') {
+            color = { background: '#581c87', border: '#c084fc' };
+            shape = 'ellipse';
+            level = 4;
+        } else if (stage === 'verification') {
+            color = { background: '#701a75', border: '#f472b6' };
+            shape = 'ellipse';
+            level = 5;
+        }
 
-    liveTreeNodes.add({
-        id: nodeId,
-        label: cleanLabel,
-        level: level,
-        shape: shape,
-        color: color,
-        customData: { stage, status, label, metadata }
-    });
+        // Status adjustments
+        if (status === 'fetching' || status === 'processing') {
+            color = { background: '#78350f', border: '#fbbf24' }; // amber
+        } else if (status === 'failed') {
+            color = { background: '#7f1d1d', border: '#ef4444' }; // red
+        } else if (status === 'success') {
+            color.border = '#10b981';
+        }
 
-    // Add connection edges
-    if (parentId && liveTreeNodes.get(parentId)) {
-        liveTreeEdges.add({ from: parentId, to: nodeId });
-    } else if (level > 0) {
-        let fallback = 'trigger';
-        if (level === 2 && nodeId.startsWith('engine_')) {
-            const parts = nodeId.split('_');
-            fallback = `subquery_${parts[1]}`;
-        } else if (level === 3) {
-            const discNode = metadata?.discovery_node;
-            if (discNode && liveTreeNodes.get(discNode)) {
-                fallback = discNode;
-            } else {
-                fallback = 'source_discovery';
+        let cleanLabel = label;
+        if (cleanLabel.length > 20) {
+            cleanLabel = cleanLabel.substring(0, 18) + '...';
+        }
+
+        liveTreeNodes.add({
+            id: nodeId,
+            label: cleanLabel,
+            level: level,
+            shape: shape,
+            color: color,
+            customData: { stage, status, label, metadata }
+        });
+
+        // Add connection edges
+        if (parentId && liveTreeNodes.get(parentId)) {
+            liveTreeEdges.add({ from: parentId, to: nodeId });
+        } else if (level > 0) {
+            let fallback = 'trigger';
+            if (level === 2 && nodeId.startsWith('engine_')) {
+                const parts = nodeId.split('_');
+                fallback = `subquery_${parts[1]}`;
+            } else if (level === 3) {
+                const discNode = metadata?.discovery_node;
+                if (discNode && liveTreeNodes.get(discNode)) {
+                    fallback = discNode;
+                } else {
+                    fallback = 'source_discovery';
+                }
+            } else if (level === 4) {
+                fallback = 'extraction';
+            } else if (level === 5) {
+                fallback = 'semantic_analysis';
             }
-        } else if (level === 4) {
-            fallback = 'extraction';
-        } else if (level === 5) {
-            fallback = 'semantic_analysis';
-        }
 
-        if (liveTreeNodes.get(fallback)) {
-            liveTreeEdges.add({ from: fallback, to: nodeId });
+            if (liveTreeNodes.get(fallback)) {
+                liveTreeEdges.add({ from: fallback, to: nodeId });
+            }
         }
     }
-
-    // Trace maps & DOM compatibility (just in case other scripts reference treeNodes map)
-    treeNodes.set(nodeId, { dataset: { stage, status } });
 
     activateStageHeader(stage);
+    scrollTreeToActiveStage(stage);
     return null;
 }
 
 function updateTreeNode(nodeId, status, label, metadata, parentId) {
-    if (!liveTreeNodes) return;
-    const node = liveTreeNodes.get(nodeId);
-    if (!node) return;
+    // 1. Update HTML Node element
+    const node = treeNodes.get(nodeId);
+    if (node) {
+        node.dataset.status = status;
 
-    let color = node.color;
-    if (status === 'fetching' || status === 'processing') {
-        color = { background: '#78350f', border: '#fbbf24' };
-    } else if (status === 'failed') {
-        color = { background: '#7f1d1d', border: '#ef4444' };
-    } else if (status === 'success') {
-        color = { background: node.color.background, border: '#10b981' };
-    }
+        const statusTag = node.querySelector('.node-status-tag');
+        if (statusTag) statusTag.textContent = STAGE_LABELS[status] || status;
 
-    let cleanLabel = label;
-    if (cleanLabel.length > 25) {
-        cleanLabel = cleanLabel.substring(0, 22) + '...';
-    }
+        const labelEl = node.querySelector('.node-label');
+        if (labelEl) labelEl.textContent = label;
 
-    liveTreeNodes.update({
-        id: nodeId,
-        label: cleanLabel,
-        color: color,
-        customData: {
-            stage: node.customData?.stage || 'general',
-            status: status,
-            label: label,
-            metadata: { ...node.customData?.metadata, ...metadata }
+        const micro = node.querySelector('.node-microcopy');
+        if (micro) {
+            if (status === 'failed') {
+                const err = metadata?.error || metadata?.reason || 'فشلت العملية';
+                micro.textContent = `خطأ: ${err}`;
+            } else if (status === 'pending') {
+                micro.textContent = 'جاري التجهيز للعملية...';
+            } else if (metadata) {
+                const parts = [];
+                if (metadata.words)   parts.push(`${metadata.words.toLocaleString()} كلمة`);
+                if (metadata.count !== undefined) parts.push(`تم العثور على ${formatScaryCount(metadata.count)} مصدر`);
+                if (metadata.method)  parts.push(metadata.method);
+                if (metadata.cb_state && metadata.cb_state !== 'closed') parts.push(`CB: ${metadata.cb_state}`);
+                micro.textContent = parts.join(' · ') || '—';
+            } else {
+                micro.textContent = label.length > 40 ? label.slice(0, 40) + '…' : label;
+            }
         }
-    });
+
+        // Add retry button on failed nodes
+        if (status === 'failed' && metadata?.can_retry) {
+            if (!node.querySelector('.node-retry-btn')) {
+                const retryBtn = document.createElement('button');
+                retryBtn.className = 'node-retry-btn';
+                retryBtn.innerHTML = '<i class="fas fa-redo-alt"></i> إعادة المحاولة';
+                retryBtn.addEventListener('click', e => {
+                    e.stopPropagation();
+                    showToast('جاري إعادة تشغيل البحث...', 'info');
+                    handleSearch(null);
+                });
+                node.appendChild(retryBtn);
+            }
+        }
+
+        // Mark stage header
+        if (status === 'success' || status === 'done') {
+            const stageHeader = document.querySelector(`.stage-header-item[data-stage="${node.dataset.stage}"]`);
+            if (stageHeader) stageHeader.classList.add('done');
+        }
+
+        if (node.dataset.stage) {
+            scrollTreeToActiveStage(node.dataset.stage);
+        }
+    }
+
+    // 2. Also update vis.js network node
+    if (liveTreeNodes) {
+        const visNode = liveTreeNodes.get(nodeId);
+        if (visNode) {
+            let color = visNode.color;
+            if (status === 'fetching' || status === 'processing') {
+                color = { background: '#78350f', border: '#fbbf24' };
+            } else if (status === 'failed') {
+                color = { background: '#7f1d1d', border: '#ef4444' };
+            } else if (status === 'success') {
+                color = { background: visNode.color.background, border: '#10b981' };
+            }
+
+            let cleanLabel = label;
+            if (cleanLabel.length > 20) {
+                cleanLabel = cleanLabel.substring(0, 18) + '...';
+            }
+
+            liveTreeNodes.update({
+                id: nodeId,
+                label: cleanLabel,
+                color: color,
+                customData: {
+                    stage: visNode.customData?.stage || 'general',
+                    status: status,
+                    label: label,
+                    metadata: { ...visNode.customData?.metadata, ...metadata }
+                }
+            });
+        }
+    }
 
     if (['fetching','processing','success'].includes(status)) {
         const treeStatus = document.getElementById('treeStatus');

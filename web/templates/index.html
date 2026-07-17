@@ -122,7 +122,7 @@
                         type="text"
                         id="searchInput"
                         class="search-field"
-                        placeholder="اكتب استعلامك بالتفصيل هنا... (35 حرفاً على الأقل للتحليل)"
+                        placeholder="اكتب استعلامك بالتفصيل هنا... (20 حرفاً على الأقل للتحليل)"
                         autocomplete="off"
                         autofocus
                         aria-label="استعلام البحث"
@@ -332,42 +332,20 @@
                 <p class="tree-status-line" id="treeStatus">في انتظار بدء الاستعلام...</p>
             </div>
 
-            <!-- Stage pipeline header -->
-            <div class="stage-header-strip">
-                <div class="stage-header-item" data-stage="trigger">
-                    <i class="fas fa-bolt"></i><span>الاستعلام</span>
-                </div>
-                <div class="stage-sep"><i class="fas fa-chevron-left"></i></div>
-                <div class="stage-header-item" data-stage="source_discovery">
-                    <i class="fas fa-search"></i><span>اكتشاف المصادر</span>
-                </div>
-                <div class="stage-sep"><i class="fas fa-chevron-left"></i></div>
-                <div class="stage-header-item" data-stage="extraction">
-                    <i class="fas fa-spider"></i><span>استخراج المحتوى</span>
-                </div>
-                <div class="stage-sep"><i class="fas fa-chevron-left"></i></div>
-                <div class="stage-header-item" data-stage="semantic_analysis">
-                    <i class="fas fa-brain"></i><span>التحليل الدلالي</span>
-                </div>
-                <div class="stage-sep"><i class="fas fa-chevron-left"></i></div>
-                <div class="stage-header-item" data-stage="verification">
-                    <i class="fas fa-shield-alt"></i><span>التحقق والتقرير</span>
+            <!-- Tree Canvas (live columns layout) -->
+            <div class="tree-canvas-wrap" id="treeCanvasWrap">
+                <div class="tree-canvas" id="treeCanvas">
+                    <div class="tree-col" id="col_trigger"></div>
+                    <div class="tree-col-connector"><div class="connector-line"></div></div>
+                    <div class="tree-col" id="col_source_discovery"></div>
+                    <div class="tree-col-connector"><div class="connector-line"></div></div>
+                    <div class="tree-col" id="col_extraction"></div>
+                    <div class="tree-col-connector"><div class="connector-line"></div></div>
+                    <div class="tree-col" id="col_semantic_analysis"></div>
+                    <div class="tree-col-connector"><div class="connector-line"></div></div>
+                    <div class="tree-col" id="col_verification"></div>
                 </div>
             </div>
-
-            <!-- Tree Canvas (dynamic vis-network interactive graph) -->
-            <div class="live-tree-canvas-container" id="liveTreeCanvasContainer" style="position: relative; width: 100%; height: 500px; background: rgba(9, 13, 22, 0.45); border: 1px solid var(--border); border-radius: var(--r-lg); overflow: hidden; margin-top: var(--sp-4);">
-                <div id="liveTreeCanvas" style="width: 100%; height: 100%;"></div>
-                <div class="graph-legend-overlay" style="position: absolute; bottom: 12px; right: 12px; display: flex; gap: var(--sp-3); background: rgba(15, 22, 36, 0.9); padding: var(--sp-2) var(--sp-3); border-radius: var(--r-md); border: 1px solid var(--border); font-size: 11px; color: var(--text-muted); backdrop-filter: blur(8px); z-index: 10; flex-wrap: wrap;">
-                    <span style="display:flex;align-items:center;gap:6px;"><span style="width:8px;height:8px;border-radius:50%;background:#8B5CF6;display:inline-block;"></span>الاستعلام الرئيسي</span>
-                    <span style="display:flex;align-items:center;gap:6px;"><span style="width:8px;height:8px;border-radius:50%;background:#3B82F6;display:inline-block;"></span>استعلام فرعي</span>
-                    <span style="display:flex;align-items:center;gap:6px;"><span style="width:8px;height:8px;border-radius:50%;background:#6366F1;display:inline-block;"></span>محركات البحث</span>
-                    <span style="display:flex;align-items:center;gap:6px;"><span style="width:8px;height:8px;border-radius:50%;background:#FBBF24;display:inline-block;"></span>تحت المعالجة</span>
-                    <span style="display:flex;align-items:center;gap:6px;"><span style="width:8px;height:8px;border-radius:50%;background:#10B981;display:inline-block;"></span>مستخرج بنجاح</span>
-                    <span style="display:flex;align-items:center;gap:6px;"><span style="width:8px;height:8px;border-radius:50%;background:#EF4444;display:inline-block;"></span>فشل الاستخراج</span>
-                </div>
-            </div>
-
 
             <!-- Mobile bottom sheet for node details -->
             <div class="node-sheet" id="nodeSheet" aria-hidden="true">
@@ -378,34 +356,31 @@
             <div class="sheet-backdrop" id="sheetBackdrop" onclick="closeNodeSheet()"></div>
         </div>
 
-        <!-- ─── KNOWLEDGE GRAPH ──────────────────────────── -->
+        <!-- ─── SOURCES GRAPH ──────────────────────────── -->
         <div id="knowledgeGraphContainer" class="tab-content is-hidden" role="tabpanel" aria-labelledby="tab_graph">
             <div class="graph-header">
                 <div>
-                    <h2>شبكة العلاقات المعرفية</h2>
-                    <p>خريطة ذهنية تفاعلية تربط المصادر والكلمات المفتاحية</p>
+                    <h2>شبكة المصادر والتقصي</h2>
+                    <p>تتبع مباشر وتفاعلي لمسار البحث واستخراج الكلمات المفتاحية دلالياً</p>
                 </div>
                 <div class="graph-btns">
-                    <button class="ghost-btn" onclick="toggleGraphPhysics()" id="physicsBtn">
-                        <i class="fas fa-pause"></i> تجميد
-                    </button>
                     <button class="ghost-btn" onclick="resetGraphView()">
                         <i class="fas fa-expand"></i> توسيط
                     </button>
                 </div>
             </div>
-            <div class="graph-layout">
-                <div class="graph-canvas-wrap">
-                    <div id="knowledgeGraphCanvas"></div>
-                </div>
-                <aside class="graph-sidebar" id="graphSidebar">
-                    <div class="sidebar-empty">
-                        <i class="fas fa-mouse-pointer"></i>
-                        <h4>استكشف الشبكة</h4>
-                        <p>انقر على عقدة لعرض تفاصيلها</p>
+            <div class="graph-layout" style="display: block;">
+                <div class="live-tree-canvas-container" id="liveTreeCanvasContainer" style="position: relative; width: 100%; height: 600px; background: rgba(9, 13, 22, 0.45); border: 1px solid var(--border); border-radius: var(--r-lg); overflow: hidden;">
+                    <div id="liveTreeCanvas" style="width: 100%; height: 100%;"></div>
+                    <div class="graph-legend-overlay" style="position: absolute; bottom: 12px; right: 12px; display: flex; gap: var(--sp-3); background: rgba(15, 22, 36, 0.9); padding: var(--sp-2) var(--sp-3); border-radius: var(--r-md); border: 1px solid var(--border); font-size: 11px; color: var(--text-muted); backdrop-filter: blur(8px); z-index: 10; flex-wrap: wrap;">
+                        <span style="display:flex;align-items:center;gap:6px;"><span style="width:8px;height:8px;border-radius:50%;background:#8B5CF6;display:inline-block;"></span>الاستعلام الرئيسي</span>
+                        <span style="display:flex;align-items:center;gap:6px;"><span style="width:8px;height:8px;border-radius:50%;background:#3B82F6;display:inline-block;"></span>استعلام فرعي</span>
+                        <span style="display:flex;align-items:center;gap:6px;"><span style="width:8px;height:8px;border-radius:50%;background:#6366F1;display:inline-block;"></span>محركات البحث</span>
+                        <span style="display:flex;align-items:center;gap:6px;"><span style="width:8px;height:8px;border-radius:50%;background:#FBBF24;display:inline-block;"></span>تحت المعالجة</span>
+                        <span style="display:flex;align-items:center;gap:6px;"><span style="width:8px;height:8px;border-radius:50%;background:#10B981;display:inline-block;"></span>مستخرج بنجاح</span>
+                        <span style="display:flex;align-items:center;gap:6px;"><span style="width:8px;height:8px;border-radius:50%;background:#EF4444;display:inline-block;"></span>فشل الاستخراج</span>
                     </div>
-                    <div class="sidebar-details" style="display:none"></div>
-                </aside>
+                </div>
             </div>
         </div>
 
@@ -523,6 +498,6 @@
 <div class="sheet-backdrop" id="filterSheetBackdrop" onclick="closeFilterSheet()"></div>
 
 <script src="/static/config.js"></script>
-<script src="/static/script.js?v=6"></script>
+<script src="/static/script.js?v=7"></script>
 </body>
 </html>

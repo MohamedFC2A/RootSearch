@@ -64,7 +64,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
             if err_type == "string_too_short" or err_type == "value_error.any_str.min_length":
                 return JSONResponse(
                     {
-                        "error": "يرجى كتابة استعلام بحث مفصل ومفهوم لا يقل عن 35 حرفاً.",
+                        "error": "يرجى كتابة استعلام بحث مفصل ومفهوم لا يقل عن 20 حرفاً.",
                         "status": "error"
                     },
                     status_code=400
@@ -230,15 +230,15 @@ async def home_head():
 
 @app.get("/api/search")
 async def api_search(
-    q: str = Query(..., min_length=35, max_length=500),
+    q: str = Query(..., min_length=20, max_length=500),
     model: str = Query("fathom_s1"),
     page: int = Query(1, ge=1),
     nocache: bool = Query(False),
     k_trusted: bool = Query(False),
 ):
     q = q.strip()
-    if len(q) < 35:
-        return JSONResponse({"error": "يرجى كتابة استعلام بحث مفصل ومفهوم لا يقل عن 35 حرفاً.", "status": "error"}, status_code=400)
+    if len(q) < 20:
+        return JSONResponse({"error": "يرجى كتابة استعلام بحث مفصل ومفهوم لا يقل عن 20 حرفاً.", "status": "error"}, status_code=400)
 
     cache_key = f"{q.lower()}:{model}:{page}:{k_trusted}"
     if not nocache:
@@ -270,7 +270,7 @@ async def api_search(
 
 @app.get("/api/search/stream")
 async def api_search_stream(
-    q: str = Query(..., min_length=35, max_length=500),
+    q: str = Query(..., min_length=20, max_length=500),
     model: str = Query("fathom_s1"),
     nocache: bool = Query(False),
     k_trusted: bool = Query(False),
