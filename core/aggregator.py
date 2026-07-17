@@ -12,13 +12,16 @@ from urllib.parse import urlparse
 from config import config
 from core.search_engine import SearchResult
 from core.analyzer import AIAnalyzer
+from core.cognitive import CognitiveReasoningPipeline
 
 
 class ResultAggregator:
     """مجمع النتائج - يدمج ويرتب ويصنف"""
     
-    def __init__(self):
-        self.analyzer = AIAnalyzer()
+    def __init__(self, on_event=None):
+        self.on_event = on_event
+        self.analyzer = AIAnalyzer(on_event=on_event)
+        self.cognitive_pipeline = CognitiveReasoningPipeline()
     
     def normalize_url(self, url: str) -> str:
         """تطبيع URL لإزالة التكرارات"""
@@ -149,12 +152,24 @@ class ResultAggregator:
         
         return min(score, 1.0)
     
+    def _tokenize_and_normalize(self, text: str) -> List[str]:
+        """تطبيع النصوص العربية والإنجليزية وإزالة علامات الترقيم"""
+        if not text:
+            return []
+        punc = ".,?!،؟:;()[]{}'\"-_/\\«»"
+        for p in punc:
+            text = text.replace(p, " ")
+        text = text.replace("أ", "ا").replace("إ", "ا").replace("آ", "ا")
+        text = text.replace("ة", "ه").replace("ى", "ي")
+        return text.lower().split()
+
     def calculate_bm25_scores(self, texts: List[str], query: str) -> List[float]:
         """تطبيق خوارزمية Okapi BM25 القياسية لترتيب النتائج"""
         if not texts:
             return []
             
-        query_terms = [t.lower() for t in query.split() if len(t) > 1]
+        query_tokens = self._tokenize_and_normalize(query)
+        query_terms = [t for t in query_tokens if len(t) > 1]
         if not query_terms:
             return [0.5] * len(texts)
             
@@ -162,12 +177,18 @@ class ResultAggregator:
             'من', 'في', 'على', 'إلى', 'عن', 'مع', 'هذا', 'هذه', 'أن', 'هو', 'هي', 'تم', 'كان',
             'the', 'of', 'and', 'a', 'to', 'in', 'is', 'you', 'that', 'it', 'he', 'was', 'for', 'on'
         }
-        semantic_terms = [t for t in query_terms if t not in stop_words]
+        
+        normalized_stop_words = set()
+        for sw in stop_words:
+            norm_sw = sw.replace("أ", "ا").replace("إ", "ا").replace("آ", "ا").replace("ة", "ه").replace("ى", "ي").lower()
+            normalized_stop_words.add(norm_sw)
+            
+        semantic_terms = [t for t in query_terms if t not in normalized_stop_words]
         if not semantic_terms:
             semantic_terms = query_terms
             
         # Tokenize and compute corpus statistics
-        tokenized_texts = [text.lower().split() for text in texts]
+        tokenized_texts = [self._tokenize_and_normalize(text) for text in texts]
         doc_lengths = [len(doc) for doc in tokenized_texts]
         avgdl = sum(doc_lengths) / len(texts) if texts else 1.0
         N = len(texts)
@@ -196,12 +217,13 @@ class ResultAggregator:
                 score += idf[term] * (numerator / denominator)
                 
             # Boost for exact phrase matches
-            text_str = texts[i].lower()
             phrase_matches = 0
             for j in range(len(query_terms) - 1):
-                phrase = ' '.join(query_terms[j:j+2])
-                if phrase in text_str:
-                    phrase_matches += 1
+                phrase_seq = query_terms[j:j+2]
+                for idx in range(len(doc) - 1):
+                    if doc[idx:idx+2] == phrase_seq:
+                        phrase_matches += 1
+                        break
             
             phrase_boost = (phrase_matches / max(len(query_terms) - 1, 1)) * 2.0
             scores.append(score + phrase_boost)
@@ -212,7 +234,62 @@ class ResultAggregator:
             scores = [s / max_score for s in scores]
             
         return scores
-    
+
+    def _extract_pub_year(self, result: SearchResult) -> Optional[int]:
+        """استخراج سنة النشر بدقة من حقول النتيجة"""
+        current_year = datetime.now().year
+        def validate_year(y):
+            try:
+                val = int(y)
+                if 1900 <= val <= current_year + 1:  # allow next-year pre-prints
+                    return val
+            except (ValueError, TypeError):
+                pass
+            return None
+
+        # 1. Check metadata
+        meta = result.metadata or {}
+        for key in ['pub_year', 'year', 'publication_year', 'publish_year']:
+            if key in meta and meta[key]:
+                v = validate_year(meta[key])
+                if v:
+                    return v
+        
+        for key in ['publish_date', 'timestamp', 'publication_date', 'date']:
+            if key in meta and meta[key]:
+                val = str(meta[key])
+                match = re.search(r'\b(19\d\d|20\d\d)\b', val)
+                if match:
+                    v = validate_year(match.group(1))
+                    if v:
+                        return v
+
+        # 2. Check URL
+        if result.url:
+            matches = re.findall(r'\b(19\d\d|20\d\d)\b', result.url)
+            for m in matches:
+                v = validate_year(m)
+                if v:
+                    return v
+
+        # 3. Check Title and Snippet
+        text_to_search = f"{result.title} {result.snippet}"
+        matches = re.findall(r'\b(19\d\d|20\d\d)\b', text_to_search)
+        for m in matches:
+            v = validate_year(m)
+            if v:
+                return v
+
+        # 4. Check result.timestamp
+        if result.timestamp:
+            match = re.search(r'\b(19\d\d|20\d\d)\b', str(result.timestamp))
+            if match:
+                v = validate_year(match.group(1))
+                if v:
+                    return v
+
+        return None
+
     async def rank_results(self, results: List[SearchResult], query: str) -> List[SearchResult]:
         """ترتيب وتصفية النتائج بدقة فائقة حسب الترابط اللفظي وتجاوز العشوائية"""
         
@@ -221,11 +298,32 @@ class ResultAggregator:
             'من', 'في', 'على', 'إلى', 'عن', 'مع', 'هذا', 'هذه', 'أن', 'هو', 'هي', 'تم', 'كان', 'كانت',
             'the', 'of', 'and', 'a', 'to', 'in', 'is', 'you', 'that', 'it', 'he', 'was', 'for', 'on', 'with', 'at', 'by'
         }
-        query_words = [w.lower() for w in re.findall(r'\w+', query) if len(w) > 1]
-        core_query_terms = [w for w in query_words if w not in stop_words]
+        query_tokens = self._tokenize_and_normalize(query)
+        query_words = [w for w in query_tokens if len(w) > 1]
+        current_year = datetime.now().year
+        
+        normalized_stop_words = set()
+        for sw in stop_words:
+            norm_sw = sw.replace("أ", "ا").replace("إ", "ا").replace("آ", "ا").replace("ة", "ه").replace("ى", "ي").lower()
+            normalized_stop_words.add(norm_sw)
+            
+        # Detect temporal intent
+        temporal_words = {"latest", "recent", "newest", "أحدث", "جديد", "أخبار", "احدث", "جديده", "news", "جديدة"}
+        has_temporal_intent = False
+        query_years = []
+        for token in query_tokens:
+            if token in temporal_words:
+                has_temporal_intent = True
+            if re.match(r'^(19\d\d|20\d\d)$', token):
+                has_temporal_intent = True
+                query_years.append(int(token))
+                
+        core_query_terms = [w for w in query_words if w not in normalized_stop_words and w not in temporal_words]
+        if not core_query_terms:
+            core_query_terms = [w for w in query_words if w not in normalized_stop_words]
         if not core_query_terms:
             core_query_terms = query_words
-            
+                
         # Calculate BM25 scores for all results at once
         texts_to_score = [f"{r.title} {r.snippet} {r.content or ''}" for r in results]
         bm25_scores = self.calculate_bm25_scores(texts_to_score, query)
@@ -238,19 +336,28 @@ class ResultAggregator:
             content_lower = (result.content or '').lower()
             full_text = f"{title_lower} {snippet_lower} {content_lower}"
             
+            doc_tokens = self._tokenize_and_normalize(full_text)
+            
             # حساب نسبة الكلمات المطابقة
-            matched_terms = [term for term in core_query_terms if term in full_text]
+            matched_terms = [term for term in core_query_terms if term in doc_tokens]
             match_ratio = len(matched_terms) / len(core_query_terms) if core_query_terms else 1.0
             
             # إقصاء حازم: إذا كان الاستعلام مركباً من 3 كلمات أساسية فأكثر، ونسبة المطابقة أقل من 60%، نستبعد النتيجة تماماً
             if len(core_query_terms) >= 3 and match_ratio < 0.6:
+                continue
+
+            # إقصاء صفر التطابق للاستعلامات القصيرة (كلمة/كلمتين): نتيجة لا تشترك
+            # بأي كلمة أساسية مع الاستعلام ولا تحقق أي درجة BM25 تُعتبر غير متعلقة.
+            bm25_val = bm25_scores[i] if i < len(bm25_scores) else 0.0
+            if core_query_terms and match_ratio == 0.0 and bm25_val == 0.0:
                 continue
                 
             # حساب التواجد المشترك في نفس الجملة (Co-occurrence)
             sentences = re.split(r'[.!?؟\n]', full_text)
             max_co_occurring = 0
             for sentence in sentences:
-                sentence_matches = sum(1 for term in core_query_terms if term in sentence)
+                sentence_tokens = self._tokenize_and_normalize(sentence)
+                sentence_matches = sum(1 for term in core_query_terms if term in sentence_tokens)
                 if sentence_matches > max_co_occurring:
                     max_co_occurring = sentence_matches
             
@@ -280,11 +387,41 @@ class ResultAggregator:
             # تطبيق العقوبات والتحفيزات
             final_score = final_score * penalty * boost
             
+            # Apply temporal intent boosting/decay
+            if has_temporal_intent:
+                pub_year = self._extract_pub_year(result)
+                if pub_year is not None:
+                    age = current_year - pub_year
+                    age = max(0, age)
+                    
+                    if query_years and pub_year in query_years:
+                        temporal_boost = 1.3
+                    elif age <= 2:
+                        temporal_boost = 1.2
+                    else:
+                        temporal_boost = max(0.5, 0.9 ** (age - 2))
+                    
+                    final_score = final_score * temporal_boost
+            else:
+                # تفضيل حداثة لطيف دائم: اضمحلال خفيف جداً للنتائج الأقدم من 8 سنوات
+                # (يعالج "المعلومات القديمة جداً" دون قلب ترتيب الاستعلامات ذات النية الزمنية).
+                pub_year = self._extract_pub_year(result)
+                if pub_year is not None:
+                    age = max(0, current_year - pub_year)
+                    if age > 8:
+                        final_score = final_score * (0.95 ** (age - 8))
+            
             result.relevance_score = round(final_score, 4)
             ranked_results.append(result)
         
         # ترتيب حسب النتيجة النهائية
         ranked_results.sort(key=lambda r: r.relevance_score, reverse=True)
+        
+        # أرضية صلة إلزامية: إسقاط النتائج ذات الدرجة الأدنى من الحد الأدنى،
+        # محروسة بعدد النتائج لتفادي إفراغ القوائم الصغيرة، مع ضمان عدم الإرجاع الفارغ.
+        if len(ranked_results) > 8:
+            filtered = [r for r in ranked_results if r.relevance_score >= config.min_relevance_score]
+            ranked_results = filtered or ranked_results[:1]
         
         return ranked_results
     
@@ -326,10 +463,16 @@ class ResultAggregator:
         # إزالة الفئات الفارغة
         return {k: v for k, v in categories.items() if v}
     
-    async def aggregate(self, results: List[SearchResult], query: str, final_analysis: bool = True) -> Dict[str, Any]:
+    async def aggregate(self, results: List[SearchResult], query: str, final_analysis: bool = True, model: str = "fathom_s1", k_trusted: bool = False) -> Dict[str, Any]:
         """تجميع كامل للنتائج مع التحليل والتصنيف"""
         
         # 1. دمج المكررات
+        if self.on_event:
+            self.on_event("node_status_update", {
+                "nodeId": "semantic_analysis",
+                "status": "processing",
+                "label": "دمج وتصفية مصادر الويب المكررة...",
+            })
         results = self.merge_duplicates(results)
         
         if not results:
@@ -343,18 +486,52 @@ class ResultAggregator:
             }
         
         # 2. ترتيب النتائج
+        if self.on_event:
+            self.on_event("node_status_update", {
+                "nodeId": "semantic_analysis",
+                "status": "processing",
+                "label": "حساب الأهمية والترابط اللفظي (BM25)...",
+            })
         ranked_results = await self.rank_results(results, query)
         
         # 3. تصنيف النتائج
+        if self.on_event:
+            self.on_event("node_status_update", {
+                "nodeId": "semantic_analysis",
+                "status": "processing",
+                "label": "تصنيف المصادر المعرفية للفئات...",
+            })
         categorized = await self.categorize_results(ranked_results)
         
         top_results = ranked_results[:config.max_final_results]
         
         if final_analysis:
             # 4. تحليل أفضل النتائج بالذكاء الاصطناعي
+            if self.on_event:
+                self.on_event("node_status_update", {
+                    "nodeId": "semantic_analysis",
+                    "status": "processing",
+                    "label": f"بدء التحليل الدلالي المتوازي لـ {len(top_results[:20])} مصدر بالـ AI...",
+                })
             analyses = await self.analyzer.analyze_results_batch(top_results)
+            # Merge individual AI webpage summaries/metadata back to top_results
+            for r in top_results:
+                match_analysis = next((a for a in analyses if a.get('url') == r.url), None)
+                if match_analysis:
+                    if 'summary' in match_analysis:
+                        r.metadata['summary'] = match_analysis['summary']
+                    if 'sentiment' in match_analysis:
+                        r.metadata['sentiment'] = match_analysis['sentiment']
+                    if 'entities' in match_analysis:
+                        r.metadata['entities'] = match_analysis['entities']
             # 5. إنشاء تقرير شامل
-            report = await self.analyzer.generate_aggregated_report(top_results, analyses, query)
+            if self.on_event:
+                self.on_event("node_status_update", {
+                    "nodeId": "semantic_analysis",
+                    "status": "processing",
+                    "label": "استخلاص الأنماط وبناء التقرير التركيبي النهائي...",
+                })
+            report = await self.analyzer.generate_aggregated_report(top_results, analyses, query, model=model, k_trusted=k_trusted)
         else:
             # تقرير مبدئي سريع للتحديث التراكمي الحي
             report = {
@@ -367,7 +544,7 @@ class ResultAggregator:
                 }
             }
         
-        return {
+        final_out = {
             'query': query,
             'timestamp': datetime.now().isoformat(),
             'total_results': len(ranked_results),
@@ -376,6 +553,11 @@ class ResultAggregator:
             'categories': {k: [self._result_to_dict(r) for r in v] for k, v in categorized.items()},
             'analysis': report,
         }
+
+        await self.cognitive_pipeline.initialize()
+        final_out = await self.cognitive_pipeline.verify_report(final_out, model=model, k_trusted=k_trusted)
+
+        return final_out
     
     def _result_to_dict(self, result: SearchResult) -> Dict[str, Any]:
         """تحويل نتيجة إلى قاموس"""
@@ -389,5 +571,6 @@ class ResultAggregator:
             'content_preview': (result.content or '')[:500] if result.content else '',
             'content_length': len(result.content or ''),
             'content_type': result.content_type,
+            'summary': result.metadata.get('summary', ''),
             'metadata': result.metadata,
         }

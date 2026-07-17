@@ -16,7 +16,7 @@ class SearchConfig:
     """إعدادات البحث المتقدمة"""
 
     # عدد النتائج من كل محرك بحث
-    results_per_engine: int = 20
+    results_per_engine: int = 40
 
     # أقصى عمق للبحث
     max_scrape_depth: int = 3
@@ -26,6 +26,12 @@ class SearchConfig:
 
     # أقصى عدد من الصفحات المتزامنة
     max_concurrent_requests: int = 50
+
+    # حدود Fathom المحسنة
+    fathom_s1_max_sources: int = 35
+    fathom_max_nodes: int = 150
+    fathom_max_depth: int = 4
+    fathom_max_concurrency: int = 12
 
     # وكلاء المستخدمين للتخفي (تستخدم fake-useragent عند توفرها)
     user_agents: List[str] = field(default_factory=lambda: [
@@ -78,6 +84,10 @@ class SearchConfig:
     gemini_api_key: Optional[str] = field(default_factory=lambda: os.getenv("GEMINI_API_KEY", ""))
     glm_api_url: Optional[str] = field(default_factory=lambda: os.getenv("GLM_API_URL", ""))
     glm_api_key: Optional[str] = field(default_factory=lambda: os.getenv("GLM_API_KEY", ""))
+    # ── DeepSeek (OpenAI-compatible API) ──
+    deepseek_api_key: Optional[str] = field(default_factory=lambda: os.getenv("DEEPSEEK_API_KEY", ""))
+    deepseek_api_url: str = field(default_factory=lambda: os.getenv("DEEPSEEK_API_URL", "https://api.deepseek.com"))
+    deepseek_model: str = field(default_factory=lambda: os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash"))
 
     enable_entity_extraction: bool = True
     enable_sentiment_analysis: bool = True

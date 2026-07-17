@@ -138,3 +138,9 @@ searx_instances.json
 /public/
 .vercel/
 
+# Logs (may contain sensitive runtime data)
+*.log
+
+# Local dev screenshots / scratch artifacts
+scratch/*.png
+

@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{ title }}</title>
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🔍</text></svg>">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>⬡</text></svg>">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@300;400;600;700;900&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -55,7 +55,15 @@
         <div id="resultsSection" class="results-section">
             <div class="results-header">
                 <div class="results-info">
-                    <span id="resultsCount">0</span> نتيجة في <span id="searchTime">0.0</span> ثانية
+                    <!-- During search, this is visible -->
+                    <span id="searchActiveStatus" class="search-active-status">
+                        <i class="fas fa-circle-notch fa-spin"></i> جاري التنقيب والتحليل الدلالي... 
+                        <span id="liveSearchTimer" class="timer-badge">0.0</span>ث
+                    </span>
+                    <!-- After search, this becomes visible -->
+                    <span id="searchResultsCountContainer" class="results-count" style="display:none">
+                        تم العثور على <span id="resultsCount">0</span> مصدر في <span id="searchTime">0.0</span>ث
+                    </span>
                 </div>
                 <div class="results-actions">
                     <button class="action-btn save-network-btn" onclick="exportAsHTMLReport()" title="حفظ شبكة المصادر التفاعلية (HTML) لفتحها لاحقاً">

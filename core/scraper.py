@@ -29,7 +29,8 @@ try:
 except Exception:
     _ua_pool = None
 
-from config import config
+from config import config, proxy_config
+from core.net import SafeResolver
 from core.search_engine import SearchResult
 
 
@@ -37,44 +38,7 @@ from core.search_engine import SearchResult
 #  SAFE DNS RESOLVER  (SSRF / DNS-Rebinding guard)
 # ─────────────────────────────────────────────
 
-class SafeResolver(aiohttp.abc.AbstractResolver):
-    """Blocks loopback, private, multicast, and reserved IPs at DNS resolution time."""
-
-    async def resolve(self, host: str, port: int = 0,
-                      family: int = socket.AF_INET) -> List[Dict[str, Any]]:
-        loop = asyncio.get_running_loop()
-        try:
-            infos = await loop.getaddrinfo(host, port, family=family,
-                                           type=socket.SOCK_STREAM)
-        except Exception as exc:
-            raise OSError(f"DNS resolution failed for {host}: {exc}")
-
-        safe = []
-        for info in infos:
-            ip = info[4][0]
-            try:
-                ip_obj = ipaddress.ip_address(ip)
-                if (ip_obj.is_loopback or ip_obj.is_private
-                        or ip_obj.is_multicast or ip_obj.is_reserved):
-                    continue
-                safe.append(info)
-            except ValueError:
-                continue
-
-        if not safe:
-            raise OSError(f"SSRF blocked: all IPs are private/reserved for {host}")
-
-        return [{
-            "hostname": host,
-            "host": item[4][0],
-            "port": item[4][1],
-            "family": item[0],
-            "proto": item[2],
-            "flags": socket.AI_NUMERICHOST,
-        } for item in safe]
-
-    async def close(self) -> None:
-        pass
+# SafeResolver is defined once in core.net (single source of truth) and imported above.
 
 
 # ─────────────────────────────────────────────
@@ -217,9 +181,9 @@ class ProxyRotator:
         return bool(self._pool)
 
 
-# Global proxy rotator (populated from config if available)
+# Global proxy rotator (populated from proxy_config when enabled)
 _proxy_rotator = ProxyRotator(
-    proxies=getattr(getattr(config, '__class__', None), 'proxies', None) or []
+    proxies=list(proxy_config.proxies) if getattr(proxy_config, 'enabled', False) else []
 )
 
 
@@ -264,6 +228,16 @@ _WIKIPEDIA_UA = (
     "RootSearchBot/2.0 (https://rootsearch.app; bot@rootsearch.app) aiohttp/3.9"
 )
 
+# Plausible organic referers — make requests look like clicks from a search engine,
+# which slips past naive Referer-based anti-bot checks.
+_REFERER_POOL: List[str] = [
+    "https://www.google.com/",
+    "https://www.bing.com/",
+    "https://duckduckgo.com/",
+    "https://search.brave.com/",
+    "https://www.google.com/search",
+]
+
 
 def _get_stealth_ua() -> str:
     """Return a realistic User-Agent string."""
@@ -275,12 +249,16 @@ def _get_stealth_ua() -> str:
     return random.choice(config.user_agents)
 
 
-def _build_stealth_headers(url: str, is_wiki: bool = False) -> Dict[str, str]:
+def _build_stealth_headers(url: str, is_wiki: bool = False,
+                           referer: Optional[str] = None) -> Dict[str, str]:
     """Compose a randomised but coherent browser fingerprint header set."""
     if is_wiki:
         return {"User-Agent": _WIKIPEDIA_UA, "Accept": "*/*"}
     hset = random.choice(_CHROME_HEADER_SETS).copy()
     hset["User-Agent"] = _get_stealth_ua()
+    # Present as organic navigation arriving from a search engine.
+    hset["Referer"] = referer or random.choice(_REFERER_POOL)
+    hset["Sec-Fetch-Site"] = "cross-site"
     return hset
 
 
@@ -366,9 +344,37 @@ class DeepScraper:
                 return False
             if h in ("localhost", "127.0.0.1", "::1") or h.endswith(".local"):
                 return False
+            
+            # Check if host is a numeric IP and verify it is not loopback/private/reserved
+            try:
+                ip = ipaddress.ip_address(h)
+                if (ip.is_private or ip.is_loopback or ip.is_multicast or ip.is_reserved):
+                    return False
+            except ValueError:
+                # Host is not an IP address (e.g. domain name), which is normal and handled by SafeResolver
+                pass
+                
             return True
         except Exception:
             return False
+
+    # ── Async DNS resolution (non-blocking, replaces socket.gethostbyname) ──
+
+    @staticmethod
+    async def _resolve_ip_async(hostname: Optional[str]) -> str:
+        """Resolve a hostname to an IP without blocking the event loop."""
+        if not hostname:
+            return ""
+        try:
+            loop = asyncio.get_running_loop()
+            infos = await loop.getaddrinfo(
+                hostname, None, family=socket.AF_INET, type=socket.SOCK_STREAM
+            )
+            if infos:
+                return infos[0][4][0]
+        except Exception:
+            pass
+        return ""
 
     # ── Core fetch with Circuit Breaker + Backoff + Proxy ────────
 
@@ -408,7 +414,9 @@ class DeepScraper:
 
             for attempt in range(4):  # max 4 attempts
                 proxy = self._proxy.get_proxy() if self._proxy.has_proxies else None
-                headers = _build_stealth_headers(url, is_wiki=(is_wiki or attempt > 1))
+                # Each attempt rotates a fresh browser identity + referer for non-wiki
+                # domains; only genuine wiki domains use the descriptive bot UA.
+                headers = _build_stealth_headers(url, is_wiki=is_wiki)
 
                 self._emit("node_status_update", {
                     "nodeId": nid,
@@ -459,10 +467,11 @@ class DeepScraper:
                             self._emit("node_status_update", {
                                 "nodeId": nid,
                                 "status": "fetching",
-                                "label": "Bypassing Cloudflare — switching UA...",
+                                "label": "Blocked (403) — rotating browser identity...",
                             })
-                            # Force wiki-bot UA on next attempt
-                            is_wiki = True
+                            # Do NOT switch to the bot UA here: the next loop iteration
+                            # already rebuilds a fresh stealth identity + referer, which
+                            # is what actually helps against Cloudflare/anti-bot walls.
                             delay = _backoff_delay(attempt, base=2.0, cap=12.0)
                             await asyncio.sleep(delay)
 
@@ -526,6 +535,34 @@ class DeepScraper:
                                 "label": f"Fetched {len(text_data):,} chars via Reader Network",
                             })
                             return text_data
+            except Exception:
+                pass
+
+            # Tertiary fallback: Wayback Machine archived snapshot. Even when the
+            # live origin blocks every request, an archived copy is usually reachable.
+            try:
+                wb_api = f"https://archive.org/wayback/available?url={url}"
+                async with session.get(wb_api, timeout=aiohttp.ClientTimeout(total=8.0)) as resp:
+                    if resp.status == 200:
+                        data = await resp.json(content_type=None)
+                        snap = (data.get("archived_snapshots") or {}).get("closest") or {}
+                        snap_url = snap.get("url")
+                        if snap_url and snap.get("available"):
+                            async with session.get(
+                                snap_url,
+                                headers=_build_stealth_headers(url),
+                                timeout=aiohttp.ClientTimeout(total=12.0),
+                            ) as r2:
+                                if r2.status == 200:
+                                    html = await r2.text(errors="replace")
+                                    if html and len(html) > 200:
+                                        self._cb.record_success(domain)
+                                        self._emit("node_status_update", {
+                                            "nodeId": nid,
+                                            "status": "success",
+                                            "label": f"Recovered {len(html):,} chars via Wayback archive",
+                                        })
+                                        return html
             except Exception:
                 pass
 
@@ -702,13 +739,7 @@ class DeepScraper:
 
             extracted["links"] = await asyncio.to_thread(get_links)
 
-            try:
-                hostname = urlparse(url).hostname
-                extracted["resolved_ip"] = (
-                    socket.gethostbyname(hostname) if hostname else ""
-                )
-            except Exception:
-                extracted["resolved_ip"] = ""
+            extracted["resolved_ip"] = await self._resolve_ip_async(urlparse(url).hostname)
 
             self._emit("node_status_update", {
                 "nodeId": nid,
@@ -725,8 +756,11 @@ class DeepScraper:
         return None
 
     async def scrape_batch(self, results: List[SearchResult],
-                           max_pages: int = 20) -> List[SearchResult]:
+                           max_pages: int = 20, k_trusted: bool = False, query: str = "") -> List[SearchResult]:
         """Scrape a ranked list of results in parallel."""
+        if k_trusted:
+            from core.k_trusted import is_domain_authorized
+            results = [r for r in results if is_domain_authorized(r.url, query)]
         sorted_results = sorted(results, key=lambda r: r.relevance_score, reverse=True)
         to_scrape = sorted_results[:max_pages]
 
@@ -757,6 +791,7 @@ class DeepScraper:
         max_depth: int = 3,
         concurrency: int = 5,
         aggregator = None,
+        k_trusted: bool = False,
     ) -> List[SearchResult]:
         """
         Recursively trace hyperlinks up to max_depth,
@@ -766,9 +801,14 @@ class DeepScraper:
         """
         import hashlib
         from urllib.parse import urlparse
+        import random
         
         def get_node_id(u: str) -> str:
             return "n_" + hashlib.md5(u.encode('utf-8')).hexdigest()[:8]
+
+        if k_trusted:
+            from core.k_trusted import is_domain_authorized
+            seeds = [r for r in seeds if is_domain_authorized(r.url, query)]
 
         visited_urls = set()
         crawled_results: List[SearchResult] = []
@@ -855,6 +895,9 @@ class DeepScraper:
 
                     if depth < max_depth and len(crawled_results) < max_nodes:
                         links = scraped.get("links", [])
+                        if k_trusted:
+                            from core.k_trusted import is_domain_authorized
+                            links = [link for link in links if is_domain_authorized(link, query)]
                         random.shuffle(links)
                         enqueued = 0
                         for link in links:

@@ -17,7 +17,8 @@ from core.search_engine import SearchResult
 class AIAnalyzer:
     """محلل الذكاء الاصطناعي - يعالج النصوص ويفهمها"""
     
-    def __init__(self):
+    def __init__(self, on_event=None):
+        self.on_event = on_event
         self.gemini_model = None
         self.nlp_initialized = False
         self._init_lock = asyncio.Lock()
@@ -37,22 +38,28 @@ class AIAnalyzer:
                     try:
                         import google.generativeai as genai
                         genai.configure(api_key=config.gemini_api_key)
-                        self.gemini_model = genai.GenerativeModel('gemini-1.5-flash')
-                        print("[✨] تم تهيئة Google Gemini API بنجاح كخيار احتياطي/أساسي")
+                        self.gemini_model = genai.GenerativeModel('gemini-2.5-flash')
+                        print("[*] تم تهيئة Google Gemini API بنجاح كخيار احتياطي/أساسي")
                     except Exception as ge:
-                        print(f"[⚠️] تعذر تهيئة Gemini API: {ge}")
+                        print(f"[!] تعذر تهيئة Gemini API: {ge}")
 
                 if config.llm_provider == "glm_colab":
                     if config.glm_api_url:
-                        print(f"[✨] تم ربط خادم البحث بنموذج GLM المستضاف على Colab: {config.glm_api_url}")
+                        print(f"[*] تم ربط خادم البحث بنموذج GLM المستضاف على Colab: {config.glm_api_url}")
                     else:
-                        print("[⚠️] تم اختيار GLM Colab ولكن رابط GLM_API_URL غير متوفر في الإعدادات.")
+                        print("[!] تم اختيار GLM Colab ولكن رابط GLM_API_URL غير متوفر في الإعدادات.")
+
+                if config.llm_provider == "deepseek":
+                    if config.deepseek_api_key:
+                        print(f"[*] تم ربط خادم البحث بنموذج DeepSeek: {config.deepseek_model}")
+                    else:
+                        print("[!] تم اختيار DeepSeek ولكن DEEPSEEK_API_KEY غير متوفر في الإعدادات.")
                 
                 self.nlp_initialized = True
                     
             except Exception as e:
-                print(f"[⚠️] تعذر تهيئة مزود الـ AI: {e}")
-                print("[ℹ️] سيتم استخدام التحليل التقليدي عند الحاجة")
+                print(f"[!] تعذر تهيئة مزود الـ AI: {e}")
+                print("[!] سيتم استخدام التحليل التقليدي عند الحاجة")
                 self.nlp_initialized = True
 
     async def _call_llm(self, prompt: str) -> Optional[str]:
@@ -86,15 +93,89 @@ class AIAnalyzer:
             
             print("[ℹ/⚠️] محاولة الرجوع التلقائي إلى Google Gemini API...")
 
+        # 1b. استخدام DeepSeek (متوافق مع OpenAI) إذا تم اختياره وتوفر المفتاح
+        if config.llm_provider == "deepseek" and config.deepseek_api_key:
+            result = await self._call_deepseek(prompt)
+            if result:
+                return result
+            print("[ℹ/⚠️] محاولة الرجوع التلقائي إلى Google Gemini API...")
+
         # 2. استخدام Google Gemini API كخيار أساسي أو كاحتياطي عند فشل Colab
         if self.gemini_model:
-            try:
-                response = await self.gemini_model.generate_content_async(prompt)
-                if response and response.text:
-                    return response.text.strip()
-            except Exception as e:
-                print(f"[⚠️] فشل الاتصال بـ Gemini API: {e}")
+            import random
+            # Sanitize the prompt to replace triple quote characters that might break formatting boundaries
+            prompt = prompt.replace('"""', '"').replace("'''", "'")
+            
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    response = await self.gemini_model.generate_content_async(prompt)
+                    if response and response.text:
+                        return response.text.strip()
+                except Exception as e:
+                    err_msg = str(e)
+                    if config.gemini_api_key:
+                        err_msg = err_msg.replace(config.gemini_api_key, "[REDACTED_API_KEY]")
+                    
+                    is_rate_limit = "429" in err_msg or "quota" in err_msg.lower() or "exhausted" in err_msg.lower()
+                    if is_rate_limit and attempt < max_retries - 1:
+                        sleep_time = random.uniform(1.0, 2.0 * (2 ** attempt))
+                        print(f"[⚠️] Gemini API rate limit (429) hit. Retrying in {sleep_time:.2f}s... (Attempt {attempt+1}/{max_retries})")
+                        await asyncio.sleep(sleep_time)
+                    else:
+                        print(f"[⚠️] فشل الاتصال بـ Gemini API: {err_msg}")
+                        break
         
+        return None
+    
+    async def _call_deepseek(self, prompt: str) -> Optional[str]:
+        """استدعاء DeepSeek عبر واجهة متوافقة مع OpenAI (وضع سريع بدون thinking)."""
+        if not config.deepseek_api_key:
+            return None
+        import random
+        url = f"{config.deepseek_api_url.rstrip('/')}/chat/completions"
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {config.deepseek_api_key}",
+        }
+        payload = {
+            "model": config.deepseek_model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.3,
+            "max_tokens": 4096,
+            "stream": False,
+            # وضع غير التفكير لسرعة أعلى وتكلفة أقل (مناسب للتلخيص/الاستخراج)
+            "thinking": {"type": "disabled"},
+        }
+        import aiohttp
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(url, json=payload, headers=headers, timeout=60) as response:
+                        if response.status == 200:
+                            data = await response.json()
+                            content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+                            if content:
+                                return content.strip()
+                            return None
+                        # 429 تجاوز الحد — إعادة المحاولة مع تأخير متزايد
+                        if response.status == 429 and attempt < max_retries - 1:
+                            sleep_time = random.uniform(1.0, 2.0 * (2 ** attempt))
+                            print(f"[⚠️] DeepSeek rate limit (429). Retrying in {sleep_time:.2f}s... ({attempt+1}/{max_retries})")
+                            await asyncio.sleep(sleep_time)
+                            continue
+                        err = await response.text()
+                        if config.deepseek_api_key:
+                            err = err.replace(config.deepseek_api_key, "[REDACTED_API_KEY]")
+                        print(f"[⚠️] فشل الاتصال بـ DeepSeek: رمز {response.status} — {err[:300]}")
+                        return None
+            except Exception as e:
+                err_msg = str(e)
+                if config.deepseek_api_key:
+                    err_msg = err_msg.replace(config.deepseek_api_key, "[REDACTED_API_KEY]")
+                print(f"[⚠️] خطأ أثناء الاتصال بـ DeepSeek: {err_msg}")
+                return None
         return None
     
     def extract_keywords_tfidf(self, text: str, top_n: int = 20, idf_dict: Optional[Dict[str, float]] = None) -> List[str]:
@@ -422,7 +503,94 @@ class AIAnalyzer:
             }
         }
     
-    async def summarize_text(self, text: str, max_length: int = 300, min_length: int = 50) -> str:
+    async def generate_direct_answer(
+        self,
+        query: str,
+        top_results: list,
+        all_content: str,
+        k_trusted: bool = False,
+    ) -> dict:
+        """
+        Generate a direct, authoritative, reference-grade answer for the given query.
+        Returns a dict with keys:
+          - 'answer':   str — the direct answer text (Markdown allowed, ≤5 sentences)
+          - 'sources':  list of {title, url, domain} — top cited sources
+          - 'verified': bool — True if K-Trust verified
+          - 'confidence': float 0-1
+        """
+        if not top_results:
+            return {'answer': '', 'sources': [], 'verified': k_trusted, 'confidence': 0.0}
+
+        # Build a compact source block for the prompt (title + domain + snippet)
+        from urllib.parse import urlparse
+        source_lines = []
+        cited_sources = []
+        for i, r in enumerate(top_results[:8], 1):
+            url   = getattr(r, 'url', '') or ''
+            title = getattr(r, 'title', '') or ''
+            snip  = (getattr(r, 'snippet', '') or getattr(r, 'content', '') or '')[:400]
+            domain = urlparse(url).netloc or getattr(r, 'source', '')
+            source_lines.append(f"[مصدر {i}] {title} ({domain})\n{snip}")
+            cited_sources.append({'title': title, 'url': url, 'domain': domain})
+
+        sources_block = "\n\n".join(source_lines)
+
+        verification_clause = ""
+        if k_trusted:
+            verification_clause = (
+                "\nأنت في وضع K-Trust: يجب أن تكون كل حقيقة مدعومة بمصدرين على الأقل. "
+                "إذا كانت المعلومات غير متوافقة عبر المصادر، أشر صراحةً إلى التعارض بدلاً من ذكر حقيقة غير محددة."
+            )
+
+        prompt = f"""أنت محرك إجابات مرجعية فورية. مهمتك: قدّم الإجابة المباشرة والصحيحة لاستعلام المستخدم بناءً على المصادر أدناه.
+
+قواعد صارمة لا تحيد عنها:
+1. الإجابة يجب أن تكون مباشرة ودقيقة — ابدأ بالحقيقة فوراً، لا مقدمات ولا حشو.
+2. الحد الأقصى 5 جمل موجزة. لا تشرح آلية عملك ولا تعيد صياغة السؤال.
+3. اذكر الأرقام والحقائق الدقيقة (أوزان، أطوال، تواريخ، نسب) بوحداتها الصحيحة دائماً.
+4. إذا كانت الإجابة غير موجودة في المصادر، قل: "لا تتوفر بيانات موثوقة كافية للإجابة على هذا الاستعلام."
+5. لا تخترع ولا تستنتج ولا تضيف معلومات خارج المصادر المقدمة.
+6. استخدم العربية الفصحى الواضحة.{verification_clause}
+
+الاستعلام: {query}
+
+المصادر:
+{sources_block}
+
+الإجابة المرجعية المباشرة:"""
+
+        try:
+            if not self.nlp_initialized:
+                await self.initialize()
+            answer_text = await self._call_llm(prompt)
+            if answer_text:
+                answer_text = answer_text.strip()
+                # Confidence heuristic: high if we have many sources and k_trusted
+                confidence = min(1.0, 0.6 + 0.05 * len(top_results) + (0.1 if k_trusted else 0))
+                return {
+                    'answer': answer_text,
+                    'sources': cited_sources[:5],
+                    'verified': k_trusted,
+                    'confidence': round(confidence, 2),
+                }
+        except Exception as e:
+            print(f"[!] generate_direct_answer failed: {e}")
+
+        # Fallback: best snippet from top result
+        if top_results:
+            r = top_results[0]
+            snip = (getattr(r, 'snippet', '') or '')[:350]
+            from urllib.parse import urlparse
+            domain = urlparse(getattr(r, 'url', '')).netloc or getattr(r, 'source', '')
+            return {
+                'answer': snip or 'لا تتوفر بيانات موثوقة كافية للإجابة على هذا الاستعلام.',
+                'sources': cited_sources[:3],
+                'verified': False,
+                'confidence': 0.3,
+            }
+        return {'answer': '', 'sources': [], 'verified': False, 'confidence': 0.0}
+
+    async def summarize_text(self, text: str, max_length: int = 300, min_length: int = 50, query: str = "", is_synthesis: bool = False) -> str:
         """تلخيص النص باستخدام AI (مع fallback لتقنية الاستخراج)"""
         if not text or len(text) < 100:
             return text
@@ -436,23 +604,24 @@ class AIAnalyzer:
                 if not self.nlp_initialized:
                     await self.initialize()
                 
-                prompt = f"""You are a master cognitive synthesizer for the RootSearch deep intelligence search engine.
-Your task is to analyze the gathered search results for the query "{query}" and generate a highly organized, world-class synthesis report in modern Arabic.
+                if is_synthesis:
+                    prompt = f"""You are a master cognitive synthesizer for the RootSearch deep intelligence search engine.
+Your task is to analyze the gathered search results for the query \"{query}\" and generate a highly organized, world-class synthesis report in modern Arabic.
 
 Strictly organize the report using the following structure:
 
-# 📊 التلخيص المعرفي والتحليل الشامل للموضوع: {query}
+# التلخيص المعرفي والتحليل الشامل للموضوع: {query}
 
-## 🔍 النظرة العامة والتحليل التنفيذي (Executive Summary)
+## النظرة العامة والتحليل التنفيذي (Executive Summary)
 > [!NOTE]
 > *اكتب فقرة مقتضبة، مركزة، وعالية القيمة تلخص صلب الموضوع وأهميته.*
 
-## 💡 النقاط الرئيسية والحقائق المثبتة (Key Core Insights)
+## النقاط الرئيسية والحقائق المثبتة (Key Core Insights)
 * **[نقطة رئيسية 1]**: تفصيل مختصر ومباشر مدعوم بالبيانات.
 * **[نقطة رئيسية 2]**: تفصيل مختصر ومباشر مدعوم بالبيانات.
 * **[نقطة رئيسية 3]**: تفصيل مختصر ومباشر مدعوم بالبيانات.
 
-## 🧭 السياق الدلالي والأبعاد المحيطة (Contextual Dimensions)
+## السياق الدلالي والأبعاد المحيطة (Contextual Dimensions)
 *اكتب تحليلاً للمحاور الجانبية المرتبطة بالاستعلام وكيف تتقاطع مع الموضوع الأساسي.*
 
 ---
@@ -460,14 +629,39 @@ Strictly organize the report using the following structure:
 
 المحتوى المجمع من المصادر:
 {text}"""
+                else:
+                    # Expert Data Extraction and Fact-Checking Prompt
+                    prompt = f"""You are an expert Data Extraction and Fact-Checking AI. Your task is to process scraped search engine snippets or webpage text, filter out low-quality web noise, and extract highly accurate, standardized data points based on the query: \"{query}\".
+
+Strictly adhere to the following data engineering and pipeline rules:
+
+1. ANTI-SEO & NOISE FILTERING:
+- Strip away and completely ignore any boilerplate content, ads, navigation links, or completely regional/generic text.
+- Focus solely on sentences/facts that directly answer the query.
+
+2. UNIT STANDARDIZATION & HUMAN SANITY CHECKS:
+- Convert and normalize all measurements into standard metrics (e.g., Height in centimeters/meters, Weight in kilograms).
+- Perform logical physical boundary checks on human attributes. For example, if a human's height is stated as > 2.5 meters (like "187 meters"), automatically recognize this as a typo for centimeters and correct it to standard format (e.g., 187 cm or 1.87 m).
+- Beware of common localization/translation bugs. For example, ensure the Arabic word "بورصة" (financial stock market) is contextualized and corrected to "inch/bouse" (بوصة) when processing measurement data.
+
+3. CONFLICT RESOLUTION & WEIGHTED CONSENSUS:
+- Prioritize globally recognized, structured databases and encyclopedias (like Wikipedia or official sports registries) over generic blogs or ad-heavy content sites. 
+- Focus on extracting consensus values backed by high-authority sources.
+
+4. STRICT CONTEXTUAL RELEVANCE (ANTI-BLEEDING):
+- Ensure that the primary entity in the source matches the user's query intent. Do not extract data about a completely different entity.
+
+5. OUTPUT STRUCTURING:
+- Output your verified summary, key facts, or final structured data clearly in modern Arabic, free from typos, mixed units, or chaotic textual noise. Keep it concise, professional, and directly answering the query.
+
+Webpage content to process:
+{text}"""
                 
                 summary = await self._call_llm(prompt)
                 if summary:
-                    return summary
+                    return summary.strip()
             except Exception as e:
-                print(f"[⚠️] فشل التلخيص بواسطة نموذج الـ AI: {e}")
-        
-        # Fallback: تلخيص بالاستخراج
+                print(f"[!] AI processing failed: {e}")
         
         # Fallback: تلخيص بالاستخراج
         return self._extractive_summary(text, max_length)
@@ -561,8 +755,9 @@ Strictly organize the report using the following structure:
             }
         }
         
-        if result.content and len(result.content) > 50:
-            content = result.content[:50000]  # حد أقصى للتحليل
+        content = result.content or result.snippet or ""
+        if content and len(content) > 30:
+            content = content[:50000]  # حد أقصى للتحليل
             
             # استخراج الكلمات المفتاحية باستخدام TF-IDF الحقيقي إذا توفر IDF
             analysis['keywords'] = self.extract_keywords_tfidf(content, 20, idf_dict=idf_dict)
@@ -577,7 +772,7 @@ Strictly organize the report using the following structure:
             
             # تلخيص
             if config.enable_summarization:
-                summary = await self.summarize_text(content)
+                summary = await self.summarize_text(content, query=result.metadata.get('subquery', '') or result.title, is_synthesis=False)
                 if summary:
                     analysis['summary'] = summary
         
@@ -608,25 +803,33 @@ Strictly organize the report using the following structure:
             for word, count in word_doc_count.items():
                 idf_dict[word] = math.log(N / (1 + count))
         
-        # تحليل كل نتيجة
+        # تحليل كل نتيجة بشكل متوازي لتسريع العملية
+        tasks = []
+        for result in results[:20]:
+            tasks.append(self.analyze_result(result, idf_dict=idf_dict))
+        
+        raw_results = await asyncio.gather(*tasks, return_exceptions=True)
+        
         analyses = []
-        for result in results[:20]:  # أقصى 20 نتيجة للتحليل
-            try:
-                analysis = await self.analyze_result(result, idf_dict=idf_dict)
-                analyses.append(analysis)
-            except Exception:
-                analyses.append({'url': result.url, 'error': 'Analysis failed'})
+        for idx, res in enumerate(raw_results):
+            if isinstance(res, Exception):
+                analyses.append({'url': results[idx].url, 'error': f'Analysis failed: {str(res)}'})
+            else:
+                analyses.append(res)
         
         return analyses
     
     async def generate_aggregated_report(self, results: List[SearchResult], 
                                    analyses: List[Dict[str, Any]], 
-                                   query: str) -> Dict[str, Any]:
+                                   query: str,
+                                   model: str = "fathom_s1",
+                                   k_trusted: bool = False) -> Dict[str, Any]:
         """توليد تقرير شامل ومجمع عن نتائج البحث"""
         
         # تجميع كل المحتوى
+        max_report_sources = 100 if model == "fathom_max" else 30
         all_content = ' '.join([
-            r.content or r.snippet for r in results[:30] if r.content or r.snippet
+            r.content or r.snippet for r in results[:max_report_sources] if r.content or r.snippet
         ])
         
         # استخراج الكلمات المفتاحية الموحدة
@@ -765,13 +968,14 @@ Strictly organize the report using the following structure:
         
         # إضافة تلخيص شامل والتحليل المعرفي العميق
         if all_content:
+            content_limit = 25000 if model == "fathom_max" else 15000
             try:
-                summary = await self.summarize_text(all_content[:15000], 500, 100)
+                summary = await self.summarize_text(all_content[:content_limit], 500, 100, query=query, is_synthesis=True)
                 report['overall_summary'] = summary
                 report['summary'] = summary
                 report['executive_summary'] = summary
             except Exception:
-                summary = self._extractive_summary(all_content[:15000], 500)
+                summary = self._extractive_summary(all_content[:content_limit], 500)
                 report['overall_summary'] = summary
                 report['summary'] = summary
                 report['executive_summary'] = summary
@@ -779,32 +983,88 @@ Strictly organize the report using the following structure:
             # إضافة تحليل عميق (ROOTBASE / Deep Analysis)
             if config.use_ai_analysis:
                 try:
-                    deep_prompt = f"""You are an elite research director and intelligence analyst.
+                    if k_trusted:
+                        deep_prompt = f"""You are the K-Trusted Super-Verification AI Layer — an elite truth auditor, cognitive synthesizer, and data engineer.
+Your task is to analyze the gathered search results for the query "{query}" and generate a world-class, 100% verified intelligence report in Arabic.
+You are running under K-Trusted Mode. You must enforce these strict verification invariants:
+
+1. Consensus Check: Cross-reference facts and numbers across a minimum of 5 independent authorized sources.
+2. Contradiction Resolution & Table: 
+   - You must construct a text-based ASCII/Markdown table comparing key claims, statistics, or facts.
+   - The table must have these exact columns: [الادعاء / الحقيقة | المصادر والروابط | مستوى الموثوقية | حالة التوافق (إجماع / تعارض) | القيمة أو الحقيقة المؤكدة].
+   - If a numerical metric or assertion lacks a clear cross-source consensus, you must EITHER:
+     a) Omit the unverified claim entirely from the report.
+     b) Clearly present the discrepancy in this table rather than stating a single unverified fact.
+3. Absolute Dimensional & Translation Safeguards:
+   - Prevent physical anomalies (e.g. human height 187 meters). Any out-of-boundary values must be auto-calibrated to correct units (e.g. 1.87 meters or 187 cm).
+   - Eliminate homograph translation bugs: Units like "Inch/Inches" must translate strictly to "بوصة / بوصات" in Arabic, and NEVER to financial terms like "بورصة".
+4. Layout Structure (Strictly in Arabic):
+   - # التقرير المعرفي الفائق الموثق (K-Trusted Intelligence Report)
+   - ## مصفوفة التحقق من صحة البيانات ومقارنة المصادر (Fact-Checking & Contradiction Matrix)
+     - [Show the Markdown Table here]
+     - Detail the consensus status of key claims.
+   - ## التحليل والتقصي المعرفي الموثق 100% (Authoritative Truth Synthesis)
+     - Comprehensive multi-paragraph analysis in Arabic containing only facts with verified cross-source consensus.
+   - ## الخلاصة والتوصيات الاستراتيجية المؤكدة (Verified Recommendations)
+     - Use > [!TIP] to outline action-oriented conclusions.
+
+Do NOT include any generic placeholders.
+
+Gathered search data:
+{all_content[:25000]}"""
+                    elif model == "fathom_max":
+                        deep_prompt = f"""You are the Fathom Max Ultimate Intelligence Engine — an elite cognitive synthesizer, data engineer, and truth verification analyst.
+Your task is to analyze the gathered search results for the query "{query}" and generate a world-class, radically detailed intelligence report in Arabic.
+You are a partner in designing this report's layout and TXT presentation format. You must dynamically adapt the report's design and structure based on the query domain (e.g., scientific research, code/architecture audits, financial analysis, or history).
+
+Design requirements for Fathom Max:
+1. Dynamic Report Structure: Design a layout that fits the query type. Ensure it feels highly professional, analytical, and rigorous.
+2. Fact-Checking & Contradiction Resolution Matrix (جدول التحقق من البيانات والمصداقية):
+   - You must design a text-based ASCII/Markdown table comparing key claims or stats extracted from different sources.
+   - The table must list: the fact/claim, the source domain/URL, the authority level (Tier 1/2/3), the consensus status (Agree/Disagree/Contradiction), and the resolved/verified truth.
+3. Detailed Sections in Arabic:
+   - # [Dynamic Title Tailored to the Query Domain]
+   - ## جدول التحقق من صحة البيانات ومصفوفة المصداقية (Data Validation & Authority Matrix)
+     - [Show the Markdown/ASCII Table here]
+     - Detail how numerical or factual contradictions between sources were resolved.
+   - ## التحليل المعرفي والتحليل الشامل للموضوع (Comprehensive Cognitive Deep Analysis)
+     - Multi-paragraph, extremely detailed and authoritative analysis of the data.
+   - ## سلسلة التفكير المتبعة والحل الدلالي للتعارضات (Semantic Conflict Resolution & Reasoning Chain)
+     - Explain your exact logic and step-by-step reasoning for validating the facts before writing.
+   - ## الخلاصة الاستشرافية والتوصيات الاستراتيجية (Forward-Looking Summary & Strategic Recommendations)
+     - Use > [!TIP] to outline action-oriented conclusions and recommendations.
+
+Do NOT output any of the instruction placeholders or generic templates. Customize the content, tables, and design completely for this search.
+
+Gathered search data:
+{all_content[:25000]}"""
+                    else:
+                        deep_prompt = f"""You are an elite research director and intelligence analyst.
 Perform a world-class deep cognitive analysis (ROOTBASE Analysis) for the query "{query}" based on the following search data.
-You must construct an extremely rigorous, analytical, and highly structured report in Arabic.
+You must construct an extremely rigorous, analytical, and highly structured report in Arabic. Do NOT output any of the instruction placeholders in brackets or asterisks verbatim; replace them entirely with your custom analytical paragraphs.
 
 Strictly format the output using this template:
 
-# 🧠 التحليل المعرفي المتقدم لشبكة العلاقات (Deep Cognitive Report)
+# التحليل المعرفي المتقدم لشبكة العلاقات (Deep Cognitive Report)
 
-## 📌 الفرضية الأساسية والتوجهات العامة (Core Hypothesis & Trends)
-*اكتب تحليلاً نقدياً للفرضية الأساسية للموضوع وتوجهاته الحالية.*
+## الفرضية الأساسية والتوجهات العامة (Core Hypothesis & Trends)
+Write your deep critical analysis of the core hypothesis and current trends here in detailed paragraphs in Arabic.
 
-## ⚖️ مقارنة المصادر وتقييم المصداقية (Source Consensus & Contradiction)
-* **نقاط الاتفاق المشتركة**: [اكتب نقاط التوافق بين المصادر المختلفة في نقاط واضحة].
-* **نقاط التعارض والاختلاف**: [اكتب الاختلافات أو التناقضات بين المصادر بالتفصيل].
-* **تقييم موثوقية المعلومات**: [تحليل مدى صدق وموثوقية المصادر المجمعة].
+## مقارنة المصادر وتقييم المصداقية (Source Consensus & Contradiction)
+* **نقاط الاتفاق المشتركة**: Write the consensus points between different sources here in clear points in Arabic.
+* **نقاط التعارض والاختلاف**: Detail any differences, conflicts, or variations between sources here in Arabic.
+* **تقييم موثوقية المعلومات**: Analyze the credibility, reliability, and bias of the sources here in Arabic.
 
-## ⛓️ شبكة الترابط والعلاقات المعرفية (Cognitive Entity Linkage)
-* **الكيانات الفاعلة**: [الشخصيات، المؤسسات، أو المفاهيم الأساسية وتأثيرها].
-* **العلاقات المتبادلة**: [كيف تترابط الكيانات ببعضها البعض ضمن هذا السياق].
+## شبكة الترابط والعلاقات المعرفية (Cognitive Entity Linkage)
+* **الكيانات الفاعلة**: Mention the key entities (people, organizations, concepts) and their influence here in Arabic.
+* **العلاقات المتبادلة**: Explain how these entities connect and interact within this context here in Arabic.
 
-## 🎯 الخلاصة الاستشرافية والتوصيات (Forward-Looking Summary & Recommendations)
+## الخلاصة الاستشرافية والتوصيات (Forward-Looking Summary & Recommendations)
 > [!TIP]
-> *استنتاجات جوهرية عملية وتوقعات مستقبلية للموضوع.*
+> Write action-oriented conclusions and future forecasts for this topic here in detailed paragraphs in Arabic.
 
 ---
-*تأكد من فصل الأقسام بوضوح باستخدام أسطر فارغة وعلامات Markdown المناسبة لمنع أي تداخل للنصوص.*
+Ensure professional markdown formatting, using empty lines between paragraphs to avoid text overlapping.
 
 المحتوى المجمع:
 {all_content[:15000]}"""
@@ -813,7 +1073,7 @@ Strictly format the output using this template:
                         report['deep_analysis'] = deep_analysis_text
                         report['fuckenbase_analysis'] = deep_analysis_text
                 except Exception as e:
-                    print(f"[⚠️] فشل إنشاء التحليل العميق بواسطة الـ AI: {e}")
+                    print(f"[!] فشل إنشاء التحليل العميق بواسطة الـ AI: {e}")
 
             if 'deep_analysis' not in report or not report['deep_analysis'] or report['deep_analysis'] == 'لا يوجد محتوى كافٍ للتحليل.':
                 fallback_deep = "### التحليل التقليدي للمصادر\n\n" + "\n\n".join([
@@ -822,7 +1082,22 @@ Strictly format the output using this template:
                 report['deep_analysis'] = fallback_deep
                 report['fuckenbase_analysis'] = fallback_deep
         
+        # ─── الإجابة المرجعية المباشرة (RootSearch AI Direct Answer) ───
+        report['direct_answer'] = {'answer': '', 'sources': [], 'verified': k_trusted, 'confidence': 0.0}
+        if results:
+            try:
+                direct = await self.generate_direct_answer(
+                    query=query,
+                    top_results=results[:8],
+                    all_content=all_content[:8000],
+                    k_trusted=k_trusted,
+                )
+                report['direct_answer'] = direct
+            except Exception as e:
+                print(f"[!] فشل إنشاء الإجابة المباشرة: {e}")
+        
         return report
+
     
     def _aggregate_sentiment(self, analyses: List[Dict[str, Any]]) -> Dict[str, Any]:
         """تجميع تحليل المشاعر عبر جميع النتائج"""
@@ -929,16 +1204,27 @@ Strictly format the output using this template:
             return explanation
         return f"مفهوم مرتبط بموضوع البحث: {query}."
 
-    async def expand_query(self, query: str) -> List[str]:
-        """توسيع الاستعلام إلى 3 استعلامات فرعية أكثر تخصصاً وتفرعاً"""
+    async def expand_query(self, query: str, model: str = "fathom_s1") -> List[str]:
+        """توسيع الاستعلام إلى 3 (S1) أو 5 (Max) استعلامات فرعية أكثر تخصصاً وتفرعاً"""
         await self.initialize()
+        num_subqueries = 5 if model == "fathom_max" else 3
+        # استنتاج النية لحقن قيد النطاق في المطالبة (تقليل التشعّب).
+        try:
+            from core.intent import classify_query
+            intent_category = classify_query(query).category
+        except Exception:
+            intent_category = "general"
         try:
             prompt = (
                 f"You are part of a deep search engine called RootSearch. "
-                f"Given the user search query: '{query}', generate exactly 3 distinct, highly targeted, "
+                f"Given the user search query: '{query}', generate exactly {num_subqueries} distinct, highly targeted, "
                 f"and relevant sub-queries or search terms to explore different angles of the query "
                 f"for a comprehensive search. "
-                f"Return ONLY a JSON list of strings, with no explanation and no markdown block. "
+                f"STRICT RULES:\n"
+                f"1. Focus strictly on resolving the user's precise query and intent. Do NOT generate broad, generic, or unrelated subqueries.\n"
+                f"2. Do NOT branch out into general biography, net worth, career, or unrelated aspects. All subqueries must be laser-focused on the exact subject of the query.\n"
+                f"3. Stay strictly within the query domain/intent: '{intent_category}'. Do NOT drift into other domains.\n"
+                f"4. Return ONLY a JSON list of strings, with no explanation and no markdown block.\n"
                 f"Example: [\"term 1\", \"term 2\", \"term 3\"]"
             )
             text = await self._call_llm(prompt)
@@ -947,9 +1233,21 @@ Strictly format the output using this template:
                 # Clean code blocks if LLM ignored instructions
                 if text.startswith("```"):
                     text = re.sub(r"^```(?:json)?\n|\n```$", "", text, flags=re.MULTILINE).strip()
-                subqueries = json.loads(text)
+                
+                # Robust extraction of JSON array
+                match = re.search(r'\[\s*".*?"\s*(?:,\s*".*?"\s*)*\]', text, re.DOTALL)
+                if match:
+                    json_str = match.group(0)
+                else:
+                    json_str = text
+                
+                try:
+                    subqueries = json.loads(json_str)
+                except Exception:
+                    subqueries = re.findall(r'"([^"]+)"', json_str)
+                
                 if isinstance(subqueries, list) and len(subqueries) > 0:
-                    return [str(q).strip() for q in subqueries[:3]]
+                    return [str(q).strip() for q in subqueries[:num_subqueries]]
         except Exception as e:
             print(f"[⚠️] Failed to expand query using AI model: {e}")
         
@@ -960,10 +1258,19 @@ Strictly format the output using this template:
             
         # Check if Arabic
         is_arabic = bool(re.search(r"[\u0600-\u06FF]", query))
-        if is_arabic:
-            exts = ["تفاصيل وتحليل", "تطبيقات وأمثلة", "أحدث التطورات"]
-            return [f"{query} {ext}" for ext in exts]
-        else:
-            exts = ["detailed analysis", "applications and examples", "latest developments"]
-            return [f"{query} {ext}" for ext in exts]
+        
+        # Check if physical attributes are present
+        query_lower = query.lower()
+        physical_keywords = ["height", "tall", "stature", "طول", "قامة", "weight", "وزن"]
+        
+        if any(pk in query_lower for pk in physical_keywords):
+            if is_arabic:
+                exts = ["بالسنتمتر", "إحصائيات رسمية", "الوزن الحقيقي", "الارتفاع الفعلي", "مقارنة قياسات"] if model == "fathom_max" else ["بالسنتمتر", "إحصائيات رسمية", "الوزن الحقيقي"]
+            else:
+                exts = ["in cm", "official stats", "exact weight", "height measurement", "official profile"] if model == "fathom_max" else ["in cm", "official stats", "exact weight"]
+            return [f"{query} {ext}" for ext in exts[:num_subqueries]]
+
+        # Fallback متحفّظ: عند فشل الـLLM لا نولّد لواحق عامة توسّع النية؛
+        # الاستعلام الأصلي مضمون دائماً في مسار البحث، فإرجاع قائمة فارغة أسلم من التشتيت.
+        return []
 

@@ -37,9 +37,9 @@ class FuckenSearch:
     def __init__(self, on_event=None):
         self.search_engine = SearchEngine(on_event=on_event)
         self.scraper = DeepScraper(on_event=on_event)
-        self.aggregator = ResultAggregator()
+        self.aggregator = ResultAggregator(on_event=on_event)
     
-    async def deep_search(self, query: str, model: str = "fathom_s1", deep_analysis: bool = True) -> dict:
+    async def deep_search(self, query: str, model: str = "fathom_s1", deep_analysis: bool = True, k_trusted: bool = False) -> dict:
         """
         البحث العميق الخارق
         
@@ -47,19 +47,21 @@ class FuckenSearch:
             query: استعلام البحث
             model: fathom_s1 أو fathom_max
             deep_analysis: هل نقوم بتحليل عميق أم بحث سريع
+            k_trusted: وضع التحقق الفائق
         
         Returns:
             تقرير شامل بنتائج البحث
         """
-        print(f"\n[🔍] Fucken Search: بدء البحث العميق...")
-        print(f"[📝] الاستعلام: {query}")
-        print(f"[⚙️]  النموذج: {model}")
-        print(f"[⚙️]  الوضع: {'تحليل عميق' if deep_analysis else 'بحث سريع'}")
+        print(f"\n[*] Fucken Search: بدء البحث العميق...")
+        print(f"[*] الاستعلام: {query}")
+        print(f"[*]  النموذج: {model}")
+        print(f"[*]  الوضع: {'تحليل عميق' if deep_analysis else 'بحث سريع'}")
+        print(f"[*]  التحقق الفائق (K-Trusted): {k_trusted}")
         
         # 1. البحث في جميع محركات البحث
-        print(f"\n[🌐] البحث في {len(config.search_engines)} محركات بحث...")
-        results = await self.search_engine.search_all(query, model=model)
-        print(f"[✅] تم العثور على {len(results)} نتيجة (قبل التصفية)")
+        print(f"\n[*] البحث في {len(config.search_engines)} محركات بحث...")
+        results = await self.search_engine.search_all(query, model=model, k_trusted=k_trusted)
+        print(f"[*] تم العثور على {len(results)} نتيجة (قبل التصفية)")
         
         if not results:
             return {
@@ -71,29 +73,30 @@ class FuckenSearch:
         
         # 2. تسليق المحتوى (إذا كان تحليل عميق)
         if deep_analysis:
-            print(f"\n[🕷️]  تسليق المواقع واستخراج المحتوى...")
+            print(f"\n[*]  تسليق المواقع واستخراج المحتوى...")
             if model == "fathom_max":
                 enriched_results = await self.scraper.scrape_recursive(
                     seeds=results,
                     query=query,
-                    max_nodes=40,
-                    max_depth=3,
-                    concurrency=4,
-                    aggregator=self.aggregator
+                    max_nodes=config.fathom_max_nodes,
+                    max_depth=config.fathom_max_depth,
+                    concurrency=config.fathom_max_concurrency,
+                    aggregator=self.aggregator,
+                    k_trusted=k_trusted
                 )
             else:
-                enriched_results = await self.scraper.scrape_batch(results, max_pages=15)
-            print(f"[✅] تم تسليق {sum(1 for r in enriched_results if r.content)} صفحة بنجاح")
+                enriched_results = await self.scraper.scrape_batch(results, max_pages=config.fathom_s1_max_sources, k_trusted=k_trusted, query=query)
+            print(f"[*] تم تسليق {sum(1 for r in enriched_results if r.content)} صفحة بنجاح")
         else:
             enriched_results = results
         
         # 3. تجميع وترتيب وتحليل
-        print(f"\n[🧠] تجميع وتحليل النتائج...")
-        final_report = await self.aggregator.aggregate(enriched_results, query, final_analysis=True)
+        print(f"\n[*] تجميع وتحليل النتائج...")
+        final_report = await self.aggregator.aggregate(enriched_results, query, final_analysis=True, model=model, k_trusted=k_trusted)
         
-        print(f"\n[🏆] اكتمل البحث العميق!")
-        print(f"[📊] إجمالي النتائج: {final_report['total_results']}")
-        print(f"[📂] التصنيفات: {', '.join(final_report.get('categories', {}).keys())}")
+        print(f"\n[*] اكتمل البحث العميق!")
+        print(f"[*] إجمالي النتائج: {final_report['total_results']}")
+        print(f"[*] التصنيفات: {', '.join(final_report.get('categories', {}).keys())}")
         
         return final_report
     

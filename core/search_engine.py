@@ -36,49 +36,50 @@ except Exception:
     _fua = None
 
 from config import config
+from core.net import SafeResolver
 
 EventCallback = Optional[Callable[[str, Dict[str, Any]], None]]
+
+
+# Truthful display names per engine key. Several keys are historical aliases whose
+# real backing source differs from the label (the original provider blocks
+# scraping); showing the true provider keeps the UI and provenance honest.
+ENGINE_DISPLAY_NAMES: Dict[str, str] = {
+    "duckduckgo": "DuckDuckGo",
+    "startpage": "Startpage",
+    "bing": "DuckDuckGo Lite",
+    "brave": "GitHub",
+    "mojeek": "DDG Instant Answers",
+    "qwant": "Europe PMC",
+    "ecosia": "BASE (Bielefeld)",
+    "searx": "SearXNG",
+    "wikipedia": "Wikipedia",
+    "wikidata": "Wikidata",
+    "arxiv": "arXiv",
+    "openalex": "OpenAlex",
+    "semantic_scholar": "Semantic Scholar",
+    "pubmed": "PubMed",
+    "crossref": "CrossRef",
+    "core": "CORE",
+    "stackexchange": "Stack Exchange",
+    "reddit": "DOAJ",
+    "hackernews": "Hacker News",
+    "openlibrary": "Open Library",
+    "internet_archive": "Internet Archive",
+    "jina": "CORE Open Access",
+}
+
+
+def engine_display_name(key: str) -> str:
+    """Return the truthful, human-readable provider name for an engine key."""
+    return ENGINE_DISPLAY_NAMES.get(key, key.replace("_", " ").title())
 
 
 # ─────────────────────────────────────────────
 #  SAFE DNS RESOLVER  (SSRF / DNS-Rebinding guard)
 # ─────────────────────────────────────────────
 
-class SafeResolver(aiohttp.abc.AbstractResolver):
-    """محلل أسماء نطاقات آمن يمنع SSRF و DNS Rebinding بشكل مطلق"""
-
-    async def resolve(self, host: str, port: int = 0, family: int = socket.AF_INET) -> List[Dict[str, Any]]:
-        loop = asyncio.get_running_loop()
-        try:
-            infos = await loop.getaddrinfo(host, port, family=family, type=socket.SOCK_STREAM)
-        except Exception as e:
-            raise OSError(f"DNS resolution failed for {host}: {e}")
-
-        safe_infos = []
-        for info in infos:
-            ip = info[4][0]
-            try:
-                ip_obj = ipaddress.ip_address(ip)
-                if ip_obj.is_loopback or ip_obj.is_private or ip_obj.is_multicast or ip_obj.is_reserved:
-                    continue
-                safe_infos.append(info)
-            except ValueError:
-                continue
-
-        if not safe_infos:
-            raise OSError(f"Access denied: Private or invalid IP addresses are blocked for {host}")
-
-        return [{
-            "hostname": host,
-            "host": item[4][0],
-            "port": item[4][1],
-            "family": item[0],
-            "proto": item[2],
-            "flags": socket.AI_NUMERICHOST,
-        } for item in safe_infos]
-
-    async def close(self) -> None:
-        pass
+# SafeResolver is defined once in core.net (single source of truth) and imported above.
 
 
 # ─────────────────────────────────────────────
@@ -170,7 +171,7 @@ class GraphCrawler:
             if r.url in self._visited:
                 continue
             score = self._semantic_score(r.url, r.title, r.snippet)
-            r.relevance_score = max(r.relevance_score, score)
+            r.relevance_score = score
             heapq.heappush(scored, (-score, id(r), r))
             self._visited.add(r.url)
 
@@ -712,7 +713,7 @@ class SearchEngine:
                     f"https://{lang}.wikipedia.org/w/api.php",
                     headers={"User-Agent": "FuckenSearch/2.0 (https://github.com/fuckensearch; research bot)"},
                     params={"action": "query", "list": "search", "srsearch": query,
-                            "srlimit": min(num_results, 15), "format": "json", "utf8": 1},
+                            "srlimit": min(num_results, 40), "format": "json", "utf8": 1},
                     timeout=10.0, json_mode=True,
                 )
                 if data:
@@ -736,14 +737,14 @@ class SearchEngine:
     async def search_arxiv(self, query: str, num_results: int = None) -> List[SearchResult]:
         """arXiv.org — Free scientific preprints API (no key needed)"""
         if num_results is None:
-            num_results = min(config.results_per_engine, 15)
+            num_results = min(config.results_per_engine, 40)
         results: List[SearchResult] = []
         try:
             url = "https://export.arxiv.org/api/query"
             params = {
                 "search_query": f"all:{query}",
                 "start": "0",
-                "max_results": str(min(num_results, 20)),
+                "max_results": str(min(num_results, 40)),
                 "sortBy": "relevance",
                 "sortOrder": "descending",
             }
@@ -777,13 +778,13 @@ class SearchEngine:
     async def search_openalex(self, query: str, num_results: int = None) -> List[SearchResult]:
         """OpenAlex — 250M+ academic works, completely free API"""
         if num_results is None:
-            num_results = min(config.results_per_engine, 15)
+            num_results = min(config.results_per_engine, 40)
         results: List[SearchResult] = []
         try:
             url = "https://api.openalex.org/works"
             params = {
                 "search": query,
-                "per-page": str(min(num_results, 25)),
+                "per-page": str(min(num_results, 40)),
                 "select": "title,doi,abstract_inverted_index,open_access,primary_location",
                 "mailto": "fuckensearch@research.org",  # polite pool — faster
             }
@@ -823,13 +824,13 @@ class SearchEngine:
     async def search_semantic_scholar(self, query: str, num_results: int = None) -> List[SearchResult]:
         """Semantic Scholar — AI-powered academic search, free API (fail-fast, no retries to avoid rate-limit waits)"""
         if num_results is None:
-            num_results = min(config.results_per_engine, 15)
+            num_results = min(config.results_per_engine, 40)
         results: List[SearchResult] = []
         try:
             url = "https://api.semanticscholar.org/graph/v1/paper/search"
             params = {
                 "query": query,
-                "limit": str(min(num_results, 20)),
+                "limit": str(min(num_results, 40)),
                 "fields": "title,abstract,url,externalIds,year",
             }
             headers = {
@@ -864,7 +865,7 @@ class SearchEngine:
     async def search_stackexchange(self, query: str, num_results: int = None) -> List[SearchResult]:
         """Stack Exchange API — free, covers Stack Overflow + 170 sites"""
         if num_results is None:
-            num_results = min(config.results_per_engine, 15)
+            num_results = min(config.results_per_engine, 40)
         results: List[SearchResult] = []
         try:
             url = "https://api.stackexchange.com/2.3/search/advanced"
@@ -873,7 +874,7 @@ class SearchEngine:
                 "sort": "relevance",
                 "q": query,
                 "site": "stackoverflow",
-                "pagesize": str(min(num_results, 25)),
+                "pagesize": str(min(num_results, 40)),
                 "filter": "withbody",
                 "key": "",  # without key: 300 req/day (with key: 10k)
             }
@@ -994,7 +995,7 @@ class SearchEngine:
             search_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
             params = {
                 "db": "pubmed", "term": query,
-                "retmax": str(min(num_results, 15)),
+                "retmax": str(min(num_results, 40)),
                 "retmode": "json", "sort": "relevance",
                 "tool": "FuckenSearch", "email": "fuckensearch@research.org",
             }
@@ -1359,32 +1360,28 @@ class SearchEngine:
                 if r.source.startswith(prefix):
                     base = val
                     break
-            r.relevance_score = max(r.relevance_score, base)
+            r.relevance_score = r.relevance_score * base
 
         unique.sort(key=lambda r: r.relevance_score, reverse=True)
         return unique[:config.max_final_results * 2]
 
-    async def search_all(self, query: str, model: str = "fathom_s1",
-                         deep_search: bool = False) -> List[SearchResult]:
-        """بحث متوازي في 22+ مصدر + GraphCrawler semantic prioritisation"""
-        self.results = []
+    def engine_methods(self) -> Dict[str, Any]:
+        """Single source of truth: engine name → bound search method.
 
-        self._emit("tree_node", {
-            "nodeId": "source_discovery", "stage": "source_discovery",
-            "status": "pending", "label": "Discovering sources (22+ engines)...",
-            "parentId": "trigger",
-        })
-
-        # All search methods — grouped by category
-        search_methods: Dict[str, Any] = {
+        NOTE: several names are historical aliases whose implementation targets a
+        different source than the label (e.g. 'bing'→DDG Lite, 'brave'→GitHub,
+        'qwant'→Europe PMC, 'ecosia'→BASE, 'reddit'→DOAJ, 'jina'→CORE) because the
+        original provider blocks scraping. Kept stable so config/UI keep working.
+        """
+        return {
             # General search engines
             "duckduckgo": self.search_duckduckgo,
             "startpage": self.search_startpage,
-            "bing": self.search_bing,          # → DDG Lite
-            "brave": self.search_brave,        # → GitHub
-            "mojeek": self.search_mojeek,      # → DDG Instant Answers
-            "qwant": self.search_qwant,        # → Europe PMC
-            "ecosia": self.search_ecosia,      # → BASE Academic
+            "bing": self.search_bing,
+            "brave": self.search_brave,
+            "mojeek": self.search_mojeek,
+            "qwant": self.search_qwant,
+            "ecosia": self.search_ecosia,
             "searx": self.search_searx,
             # Encyclopedia & structured
             "wikipedia": self.search_wikipedia,
@@ -1398,29 +1395,62 @@ class SearchEngine:
             "core": self.search_core,
             # Community & code
             "stackexchange": self.search_stackexchange,
-            "reddit": self.search_reddit,      # → DOAJ
+            "reddit": self.search_reddit,
             "hackernews": self.search_hackernews,
             # Books & archive
             "openlibrary": self.search_openlibrary,
             "internet_archive": self.search_internet_archive,
             # AI-powered / CORE open
-            "jina": self.search_jina,          # → CORE Open Access
+            "jina": self.search_jina,
         }
 
-        # Filter by config (if config.search_engines is set, only use those)
-        engines_to_use = [
-            e for e in search_methods
-            if not config.search_engines or e in config.search_engines
-        ]
+    def select_engines(self, query: str) -> Dict[str, Any]:
+        """Intent-filtered engine map (∩ config.search_engines).
+
+        Prevents general queries from being polluted by academic-only sources.
+        Guard: if the intent filter empties the set, fall back to every enabled
+        engine so a query is never left with zero sources.
+        """
+        methods = self.engine_methods()
+        from core.intent import classify_query
+        suggested = set(classify_query(query).suggested_engines)
+        selected = {
+            name: func for name, func in methods.items()
+            if name in suggested
+            and (not config.search_engines or name in config.search_engines)
+        }
+        if not selected:
+            selected = {
+                name: func for name, func in methods.items()
+                if not config.search_engines or name in config.search_engines
+            }
+        return selected
+
+    async def search_all(self, query: str, model: str = "fathom_s1",
+                         deep_search: bool = False, k_trusted: bool = False) -> List[SearchResult]:
+        """بحث متوازي في 22+ مصدر + GraphCrawler semantic prioritisation"""
+        self.results = []
+
+        self._emit("tree_node", {
+            "nodeId": "source_discovery", "stage": "source_discovery",
+            "status": "pending", "label": "Discovering sources (22+ engines)...",
+            "parentId": "trigger",
+        })
+
+        # Engine map + intent-based selection come from the single source of truth
+        # (engine_methods/select_engines), shared with the web streaming pipeline.
+        search_methods = self.engine_methods()
+        engines_to_use = list(self.select_engines(query).keys())
 
         # Timeout depends on model
         timeout_val = 20.0 if model == "fathom_max" else 10.0
 
         async def _run_engine(name: str, func) -> tuple:
+            disp = engine_display_name(name)
             self._emit("tree_node", {
                 "nodeId": f"engine_{name}", "stage": "source_discovery",
                 "status": "fetching",
-                "label": f"Querying {name.replace('_', ' ').title()}...",
+                "label": f"Querying {disp}...",
                 "parentId": "source_discovery",
             })
             try:
@@ -1430,8 +1460,8 @@ class SearchEngine:
                     "nodeId": f"engine_{name}",
                     "status": "success" if res else "failed",
                     "label": (
-                        f"{name.replace('_', ' ').title()}: {len(res)} results"
-                        if res else f"{name.replace('_', ' ').title()}: no results"
+                        f"{disp}: {len(res)} results"
+                        if res else f"{disp}: no results"
                     ),
                     "metadata": {"count": len(res)},
                 })
@@ -1439,13 +1469,13 @@ class SearchEngine:
             except asyncio.TimeoutError:
                 self._emit("node_status_update", {
                     "nodeId": f"engine_{name}", "status": "failed",
-                    "label": f"{name}: timed out",
+                    "label": f"{disp}: timed out",
                 })
                 return name, []
             except Exception as exc:
                 self._emit("node_status_update", {
                     "nodeId": f"engine_{name}", "status": "failed",
-                    "label": f"{name}: {type(exc).__name__}",
+                    "label": f"{disp}: {type(exc).__name__}",
                 })
                 return name, []
 
@@ -1460,13 +1490,23 @@ class SearchEngine:
             if isinstance(item, tuple):
                 _, res = item
                 if isinstance(res, list):
+                    if k_trusted:
+                        from core.k_trusted import is_domain_authorized
+                        res = [r for r in res if is_domain_authorized(r.url, query)]
                     all_results.extend(res)
 
         # GraphCrawler semantic prioritisation
         crawler = GraphCrawler(query=query, max_nodes=200, on_event=self._on_event)
         prioritised = crawler.prioritise(all_results)
-        self.results = self.deduplicate_and_sort(prioritised)
-        return self.results
+        if k_trusted:
+            from core.k_trusted import is_domain_authorized
+            prioritised = [r for r in prioritised if is_domain_authorized(r.url, query)]
+        # Return a local (not shared self.results) so a pooled/shared engine stays
+        # correct under concurrent requests — a parallel call must not be able to
+        # clobber the list this call is about to return.
+        final_results = self.deduplicate_and_sort(prioritised)
+        self.results = final_results
+        return final_results
 
     async def close(self):
         """إغلاق الجلسة"""
