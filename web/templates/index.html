@@ -55,6 +55,28 @@
 </head>
 <body>
 <a href="#searchInput" class="skip-link">تخطي إلى البحث</a>
+
+<!-- DIAGNOSTIC CORS / CONNECTION BANNER -->
+<div id="diagnosticBanner" class="diagnostic-banner" style="display: none;">
+    <div class="diagnostic-content">
+        <div class="diagnostic-left">
+            <i class="fas fa-exclamation-triangle warning-icon"></i>
+            <div class="diagnostic-text">
+                <strong>فشل الاتصال الآمن بالسيرفر المحلي (CORS / Cloudflare Block)</strong>
+                <span>نظام حماية Cloudflare Tunnel يحجب المتصفح من إرسال الطلبات البرمجية. اضغط على الزر أدناه لتفعيل الاتصال بالسيرفر في صفحة جديدة مرة واحدة.</span>
+            </div>
+        </div>
+        <div class="diagnostic-actions">
+            <a id="diagnosticBypassBtn" href="#" target="_blank" class="diagnostic-btn">
+                <i class="fas fa-external-link-alt"></i> تفعيل الاتصال
+            </a>
+            <button onclick="retryConnection()" class="diagnostic-btn secondary">
+                <i class="fas fa-sync-alt"></i> إعادة التحقق
+            </button>
+        </div>
+    </div>
+</div>
+
 <div class="search-progress-bar" id="searchProgressBar">
     <div class="progress-bar-fill" id="progressBarFill"></div>
 </div>

@@ -143,18 +143,165 @@ function showToast(message, type = 'info', duration = 4500) {
     }, duration);
 }
 
-// ─── SYSTEM STATUS ────────────────────────────────────────────
+// ─── SYSTEM STATUS & DIAGNOSTICS ──────────────────────────────
 async function loadSystemStatus() {
     try {
         const res = await fetch(`${API_BASE}/api/status`);
-        if (!res.ok) return;
+        if (!res.ok) {
+            throw new Error(`Server returned HTTP ${res.status}`);
+        }
         const data = await res.json();
         if (data.fathom_s1_max_sources) systemLimits.fathom_s1_max_sources = data.fathom_s1_max_sources;
         if (data.fathom_max_nodes) systemLimits.fathom_max_nodes = data.fathom_max_nodes;
         if (data.fathom_max_concurrency) systemLimits.fathom_max_concurrency = data.fathom_max_concurrency;
         updateEngineCounter();
         setStatusDot('idle');
-    } catch (_) { /* silent */ }
+
+        // Hide diagnostic banner on success
+        const banner = document.getElementById('diagnosticBanner');
+        if (banner) banner.style.display = 'none';
+    } catch (err) {
+        runSystemDiagnostics(err);
+    }
+}
+
+async function runSystemDiagnostics(error) {
+    const apiBase = window.API_BASE || '';
+    const cleanApiBase = apiBase.replace(/\/+$/, '');
+    const isCloudflare = cleanApiBase.includes('trycloudflare.com');
+    const isLocalhost = cleanApiBase.includes('localhost') || cleanApiBase.includes('127.0.0.1');
+    const isOnline = navigator.onLine;
+
+    // 1. Show diagnostic banner
+    const banner = document.getElementById('diagnosticBanner');
+    const bypassBtn = document.getElementById('diagnosticBypassBtn');
+    if (banner) {
+        banner.style.display = 'block';
+        if (isCloudflare) {
+            if (bypassBtn) {
+                bypassBtn.style.display = 'inline-flex';
+                bypassBtn.href = cleanApiBase + '/api/status';
+            }
+        } else {
+            // General connection error
+            const diagText = banner.querySelector('.diagnostic-text');
+            if (diagText) {
+                diagText.innerHTML = `
+                    <strong>فشل الاتصال بالخادم المحلي (${escapeHtml(cleanApiBase || 'غير محدد')})</strong>
+                    <span>الرجاء التأكد من تشغيل الباك-اند المحلي (uvicorn) وعمل نفق التوصيل بنجاح.</span>
+                `;
+            }
+            if (bypassBtn) bypassBtn.style.display = 'none';
+        }
+    }
+
+    // 2. Update UI Status Dot to error
+    setStatusDot('error', 'offline');
+
+    // 3. Print Giant styled Console Diagnostic Report
+    console.clear();
+    console.log(
+        `%c┌────────────────────────────────────────────────────────────────────────┐\n` +
+        `│                      ROOTSEARCH DIAGNOSTIC ENGINE                      │\n` +
+        `└────────────────────────────────────────────────────────────────────────┘`,
+        "color: #c9a84c; font-size: 14px; font-weight: bold; font-family: monospace;"
+    );
+
+    console.log(
+        `%c[!] DIAGNOSTIC REPORT GENERATED AT: %c${new Date().toLocaleString('ar-EG')}`,
+        "color: #ef4444; font-weight: bold;",
+        "color: #cbd5e1;"
+    );
+
+    console.log(
+        `%c[+] NETWORK INTERNET STATE: %c${isOnline ? '🟢 ONLINE (متصل بالإنترنت)' : '🔴 OFFLINE (غير متصل بالإنترنت)'}`,
+        "color: #3b82f6; font-weight: bold;",
+        "font-size: 11px;"
+    );
+
+    console.log(
+        `%c[+] API BASE ENDPOINT: %c${cleanApiBase || 'Empty / Undefined'}`,
+        "color: #3b82f6; font-weight: bold;",
+        "color: #f59e0b; font-family: monospace; font-size: 11px;"
+    );
+
+    console.log(
+        `%c[+] DETECTED ERROR: %c${error ? error.message : 'TypeError: Failed to fetch (CORS block)'}`,
+        "color: #ef4444; font-weight: bold;",
+        "color: #fca5a5; font-family: monospace;"
+    );
+
+    if (isCloudflare) {
+        console.log(
+            `%c[!] DIAGNOSIS: %cCORS POLICY BLOCK VIA CLOUDFLARE QUICK TUNNEL`,
+            "color: #f97316; font-weight: bold;",
+            "color: #ef4444; font-weight: bold;"
+        );
+        console.log(
+            `%c\n💡 [طريقة حل المشكلة وتخطي حجب المتصفح للطلب]:\n` +
+            `1. اضغط على رابط تفعيل الاتصال أدناه لفتحه في علامة تبويب جديدة:\n` +
+            `   👉 %c${cleanApiBase}/api/status%c\n` +
+            `2. ستظهر لك صفحة تحذيرية حمراء/رمادية من Cloudflare (لأنك تزور الرابط لأول مرة).\n` +
+            `3. اضغط على زر %c"Proceed to site"%c أو %c"المتابعة إلى الموقع"%c لتخطي التحذير.\n` +
+            `4. بمجرد ظهور بيانات الـ JSON على شاشتك، أغلق علامة التبويب وعُد إلى هنا واضغط على زر "إعادة التحقق"!\n`,
+            "color: #10b981; font-weight: bold; font-size: 12.5px;",
+            "color: #c9a84c; text-decoration: underline; font-family: monospace; font-size: 13px; font-weight: bold;",
+            "color: #10b981; font-weight: bold; font-size: 12.5px;",
+            "color: #fff; background: #059669; padding: 1px 4px; border-radius: 3px; font-weight: bold;",
+            "color: #10b981; font-weight: bold; font-size: 12.5px;",
+            "color: #fff; background: #059669; padding: 1px 4px; border-radius: 3px; font-weight: bold;",
+            "color: #10b981; font-weight: bold; font-size: 12.5px;"
+        );
+    } else if (isLocalhost) {
+        console.log(
+            `%c[!] DIAGNOSIS: %cLOCAL BACKEND OFFLINE OR PORT BLOCKED`,
+            "color: #f97316; font-weight: bold;",
+            "color: #ef4444; font-weight: bold;"
+        );
+        console.log(
+            `%c\n💡 [طريقة حل المشكلة]:\n` +
+            `1. تأكد من تشغيل ملف uvicorn محلياً على جهازك على المنفذ 8123.\n` +
+            `2. تأكد من أن السيرفر يعمل بنجاح بزيارة http://localhost:8123.\n`,
+            "color: #10b981; font-weight: bold; font-size: 12.5px;"
+        );
+    }
+
+    console.log(
+        `%c┌────────────────────────────────────────────────────────────────────────┐\n` +
+        `│                     AI INTEGRATED PIPELINE METRICS                     │\n` +
+        `├────────────────────────────────────────────────────────────────────────┤\n` +
+        `│  • Primary Model:         fathom_s1 (DeepSeek Chat API)                │\n` +
+        `│  • Advanced Model:        fathom_max (DeepSeek Deep Reasoning)         │\n` +
+        `│  • Gemini Fallback API:   Permanently REMOVED                          │\n` +
+        `│  • Connection Pooling:    aiohttp.ClientSession (Pooling Enabled)        │\n` +
+        `│  • Rate-Limit Guard:      Top 8 Parallel Summaries + 12 Extractive     │\n` +
+        `└────────────────────────────────────────────────────────────────────────┘`,
+        "color: #a855f7; font-family: monospace; font-size: 11px;"
+    );
+}
+
+async function retryConnection() {
+    const banner = document.getElementById('diagnosticBanner');
+    setStatusDot('idle', 'Rechecking...');
+    try {
+        const res = await fetch(`${API_BASE}/api/status`);
+        if (res.ok) {
+            const data = await res.json();
+            if (data.fathom_s1_max_sources) systemLimits.fathom_s1_max_sources = data.fathom_s1_max_sources;
+            if (data.fathom_max_nodes) systemLimits.fathom_max_nodes = data.fathom_max_nodes;
+            if (data.fathom_max_concurrency) systemLimits.fathom_max_concurrency = data.fathom_max_concurrency;
+            updateEngineCounter();
+            setStatusDot('idle', 'Ready');
+            if (banner) banner.style.display = 'none';
+            showToast('✅ تم الاتصال بنجاح بالخلفية ونظام التحليل!', 'success');
+            console.log('%c✅ Connection restored successfully!', 'color: #22c55e; font-weight: bold; font-size: 14px;');
+        } else {
+            throw new Error(`Server returned HTTP ${res.status}`);
+        }
+    } catch (err) {
+        runSystemDiagnostics(err);
+        showToast('❌ فشل الاتصال بالخادم من جديد، يرجى تفعيل التخطي أولاً.', 'error');
+    }
 }
 
 function setStatusDot(state, label = '') {
@@ -843,6 +990,9 @@ function startSSEStream(query, model, attempt = 0) {
         document.getElementById('treeStatus').textContent =
             'تعذّر الاتصال بالخادم بعد عدة محاولات. اضغط بحث للمحاولة مجدداً.';
         showToast('تعذر الاتصال بعد عدة محاولات', 'error');
+        
+        // Trigger smart diagnostics for connection failure
+        runSystemDiagnostics(new Error("EventSource connection lost after multiple retry attempts"));
     };
 }
 

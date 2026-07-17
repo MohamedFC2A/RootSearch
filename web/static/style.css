@@ -2410,3 +2410,93 @@ kbd {
 .k-trusted-badge { display: none !important; }
 /* Backward compat: hide old toggle btn class if used */
 .k-trusted-toggle-btn:not(.kt-chip) { display: none !important; }
+
+/* ─── DIAGNOSTIC CORS BANNER ─────────────────────────────────── */
+.diagnostic-banner {
+  background: rgba(239, 68, 68, 0.1);
+  border-bottom: 1px solid rgba(239, 68, 68, 0.2);
+  padding: 12px 24px;
+  color: #fca5a5;
+  font-family: 'Cairo', sans-serif;
+  z-index: 10000;
+  position: relative;
+  box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+  animation: slideDown 0.3s ease;
+}
+@keyframes slideDown {
+  from { transform: translateY(-100%); }
+  to { transform: translateY(0); }
+}
+.diagnostic-content {
+  max-width: 1200px;
+  margin: 0 auto;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+.diagnostic-left {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+.diagnostic-left .warning-icon {
+  font-size: 24px;
+  color: #ef4444;
+  animation: pulseWarning 1.5s infinite alternate;
+}
+@keyframes pulseWarning {
+  from { transform: scale(1); filter: drop-shadow(0 0 2px rgba(239,68,68,0.5)); }
+  to { transform: scale(1.15); filter: drop-shadow(0 0 10px rgba(239,68,68,0.8)); }
+}
+.diagnostic-text {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  text-align: right;
+}
+.diagnostic-text strong {
+  font-size: 14px;
+  color: #f87171;
+}
+.diagnostic-text span {
+  font-size: 11.5px;
+  color: #cbd5e1;
+}
+.diagnostic-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.diagnostic-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: #ef4444;
+  color: #fff !important;
+  border: none;
+  border-radius: 6px;
+  padding: 8px 16px;
+  font-size: 12px;
+  font-weight: 600;
+  text-decoration: none;
+  cursor: pointer;
+  transition: all 0.2s;
+  box-shadow: 0 4px 10px rgba(239,68,68,0.25);
+}
+.diagnostic-btn:hover {
+  background: #dc2626;
+  box-shadow: 0 4px 12px rgba(239,68,68,0.4);
+}
+.diagnostic-btn.secondary {
+  background: transparent;
+  color: #94a3b8 !important;
+  border: 1px solid #334155;
+  box-shadow: none;
+}
+.diagnostic-btn.secondary:hover {
+  background: rgba(255,255,255,0.05);
+  color: #fff !important;
+  border-color: #475569;
+}
