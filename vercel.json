@@ -1,18 +1,7 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": null,
-  "buildCommand": null,
-  "installCommand": null,
-  "rewrites": [
-    { "source": "/", "destination": "/web/templates/index.html" },
-    { "source": "/static/(.*)", "destination": "/web/static/$1" }
-  ],
-  "headers": [
-    {
-      "source": "/web/static/(.*)",
-      "headers": [
-        { "key": "Cache-Control", "value": "public, max-age=3600" }
-      ]
-    }
-  ]
+  "installCommand": "echo no-install-needed",
+  "buildCommand": "mkdir -p public/static && cp web/templates/index.html public/index.html && cp -r web/static/. public/static/",
+  "outputDirectory": "public"
 }
