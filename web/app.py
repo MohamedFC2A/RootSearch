@@ -562,9 +562,10 @@ async def api_search_stream(
                         "parentId": parent_id,
                     }))
                     try:
+                        scrape_timeout = 35.0 if model == "fathom_max" else 20.0
                         scraped = await asyncio.wait_for(
                             engine.scraper.scrape_url(res.url, fallback_snippet=res.snippet, parent_metadata={"relevance_score": res.relevance_score}),
-                            timeout=6.0
+                            timeout=scrape_timeout
                         )
                         if scraped and scraped.get("content"):
                             res.content = scraped["content"]
