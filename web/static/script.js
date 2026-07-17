@@ -71,7 +71,7 @@ function updateEngineCounter() {
     const model = document.getElementById('searchModelInput')?.value || 'fathom_s1';
     let count = 0;
     if (model === 'fathom_s1') {
-        count = 15;
+        count = systemLimits.fathom_s1_max_sources || 35;
     } else {
         count = systemLimits.fathom_max_nodes || 150;
     }
@@ -446,7 +446,10 @@ function handleSearch(e) {
     if (e) e.preventDefault();
     const input = document.getElementById('searchInput');
     const query = input?.value?.trim();
-    if (!query) { showToast('الرجاء إدخال استعلام البحث', 'error'); return false; }
+    if (!query || query.length < 35) { 
+        showToast('الرجاء كتابة استعلام بحث مفصل ومفهوم لا يقل عن 35 حرفاً.', 'error'); 
+        return false; 
+    }
 
     currentQuery = query;
     searchStartTime = Date.now();

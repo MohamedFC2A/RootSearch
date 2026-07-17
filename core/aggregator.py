@@ -554,8 +554,9 @@ class ResultAggregator:
             'analysis': report,
         }
 
-        await self.cognitive_pipeline.initialize()
-        final_out = await self.cognitive_pipeline.verify_report(final_out, model=model, k_trusted=k_trusted)
+        if final_analysis:
+            await self.cognitive_pipeline.initialize()
+            final_out = await self.cognitive_pipeline.verify_report(final_out, model=model, k_trusted=k_trusted)
 
         return final_out
     

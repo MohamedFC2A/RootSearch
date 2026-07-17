@@ -53,6 +53,24 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+from fastapi.exceptions import RequestValidationError
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    errors = exc.errors()
+    for err in errors:
+        if "q" in err.get("loc", []):
+            err_type = err.get("type")
+            if err_type == "string_too_short" or err_type == "value_error.any_str.min_length":
+                return JSONResponse(
+                    {
+                        "error": "يرجى كتابة استعلام بحث مفصل ومفهوم لا يقل عن 35 حرفاً.",
+                        "status": "error"
+                    },
+                    status_code=400
+                )
+    return JSONResponse({"error": str(errors), "status": "error"}, status_code=422)
+
 templates_path = os.path.join(os.path.dirname(__file__), "templates")
 static_path = os.path.join(os.path.dirname(__file__), "static")
 
@@ -212,15 +230,15 @@ async def home_head():
 
 @app.get("/api/search")
 async def api_search(
-    q: str = Query(..., min_length=1, max_length=500),
+    q: str = Query(..., min_length=35, max_length=500),
     model: str = Query("fathom_s1"),
     page: int = Query(1, ge=1),
     nocache: bool = Query(False),
     k_trusted: bool = Query(False),
 ):
     q = q.strip()
-    if not q:
-        return JSONResponse({"error": "يرجى إدخال استعلام البحث", "status": "error"}, status_code=400)
+    if len(q) < 35:
+        return JSONResponse({"error": "يرجى كتابة استعلام بحث مفصل ومفهوم لا يقل عن 35 حرفاً.", "status": "error"}, status_code=400)
 
     cache_key = f"{q.lower()}:{model}:{page}:{k_trusted}"
     if not nocache:
@@ -252,7 +270,7 @@ async def api_search(
 
 @app.get("/api/search/stream")
 async def api_search_stream(
-    q: str = Query(..., min_length=1, max_length=500),
+    q: str = Query(..., min_length=35, max_length=500),
     model: str = Query("fathom_s1"),
     nocache: bool = Query(False),
     k_trusted: bool = Query(False),
@@ -319,6 +337,20 @@ async def api_search_stream(
             from core.analyzer import AIAnalyzer
             analyzer = AIAnalyzer()
             
+            # 1. AI-powered query intent diagnosis to dynamically route engines
+            ai_suggested = None
+            try:
+                ai_suggested = await asyncio.wait_for(
+                    analyzer.classify_query_intent_ai(q),
+                    timeout=3.0
+                )
+                if ai_suggested:
+                    print(f"[AI Intent Diagnosis] Dynamic search engines selected: {ai_suggested}")
+            except asyncio.TimeoutError:
+                print("[AI Intent Timeout] Query intent diagnosis took too long, falling back to rule-based classification.")
+            except Exception as e:
+                print(f"[AI Intent Error] Query intent diagnosis failed: {e}")
+
             # Perform query expansion (branching) with a strict 4-second timeout to prevent blocking
             subqueries = [q]  # Always include the original query
             try:
@@ -340,7 +372,7 @@ async def api_search_stream(
             # the SearchEngine (engine_methods/select_engines), so this streaming
             # pipeline can never drift from search_all's engine list.
             all_engine_funcs = se.engine_methods()
-            engine_funcs = se.select_engines(q)
+            engine_funcs = se.select_engines(q, suggested_engines=ai_suggested)
 
             # محركات مختصرة للاستعلامات الفرعية (أفضل 3) للحد من التشعّب التوافقي.
             _primary_order = ["startpage", "duckduckgo", "wikipedia", "bing", "brave", "searx"]

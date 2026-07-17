@@ -1404,7 +1404,7 @@ class SearchEngine:
             "jina": self.search_jina,
         }
 
-    def select_engines(self, query: str) -> Dict[str, Any]:
+    def select_engines(self, query: str, suggested_engines: Optional[List[str]] = None) -> Dict[str, Any]:
         """Intent-filtered engine map (∩ config.search_engines).
 
         Prevents general queries from being polluted by academic-only sources.
@@ -1412,8 +1412,11 @@ class SearchEngine:
         engine so a query is never left with zero sources.
         """
         methods = self.engine_methods()
-        from core.intent import classify_query
-        suggested = set(classify_query(query).suggested_engines)
+        if suggested_engines is None:
+            from core.intent import classify_query
+            suggested_engines = classify_query(query).suggested_engines
+            
+        suggested = set(suggested_engines)
         selected = {
             name: func for name, func in methods.items()
             if name in suggested

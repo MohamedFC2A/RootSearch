@@ -1472,3 +1472,64 @@ Ensure professional markdown formatting, using empty lines between paragraphs to
         # الاستعلام الأصلي مضمون دائماً في مسار البحث، فإرجاع قائمة فارغة أسلم من التشتيت.
         return []
 
+    async def classify_query_intent_ai(self, query: str) -> Optional[List[str]]:
+        """شخص الاستعلام بالـ AI لمعرفة وتوجيه مصادره بشكل دقيق وصحيح وتجنب تشتيت المحركات"""
+        await self.initialize()
+        try:
+            prompt = (
+                f"You are part of a deep search engine called RootSearch. "
+                f"Analyze the user query: '{query}' and classify its search intent. "
+                f"STRICTLY classify the query into one of these categories:\n"
+                f"- 'academic': scientific papers, research, medicine, biology, physics, mathematics, chemistry, academic studies.\n"
+                f"- 'code': programming, software, APIs, coding errors, syntax, framework usage.\n"
+                f"- 'news': breaking news, current events, temporal topics.\n"
+                f"- 'physical': physical lookup, static specs, measurements (height, weight), structural facts.\n"
+                f"- 'general': general knowledge, history, geography, lifestyle, movies, music, or anything else.\n\n"
+                f"Based on the classification, select a list of engines from this available set:\n"
+                f"['duckduckgo', 'startpage', 'bing', 'brave', 'mojeek', 'qwant', 'ecosia', 'searx', "
+                f"'wikipedia', 'wikidata', 'arxiv', 'openalex', 'semantic_scholar', 'pubmed', 'crossref', "
+                f"'core', 'stackexchange', 'reddit', 'hackernews', 'openlibrary', 'internet_archive', 'jina']\n\n"
+                f"STRICT RULES:\n"
+                f"1. Always include general engines: ['duckduckgo', 'startpage', 'wikipedia'].\n"
+                f"2. For 'academic': add ['arxiv', 'openalex', 'semantic_scholar', 'pubmed', 'crossref', 'core', 'openlibrary', 'internet_archive'].\n"
+                f"3. For 'code': add ['stackexchange', 'hackernews', 'brave', 'searx'].\n"
+                f"4. For 'news': add ['hackernews', 'qwant', 'ecosia'].\n"
+                f"5. For 'physical': add ['wikidata'].\n\n"
+                f"Return ONLY a JSON list of strings containing the selected engine names, e.g.: [\"duckduckgo\", \"startpage\", ...]\n"
+                f"Do not return markdown formatting blocks or any extra text."
+            )
+            text = await self._call_llm(prompt)
+            if text:
+                text = text.strip()
+                if text.startswith("```"):
+                    text = re.sub(r"^```(?:json)?\n|\n```$", "", text, flags=re.MULTILINE).strip()
+                
+                # Robust extraction of JSON array
+                match = re.search(r'\[\s*".*?"\s*(?:,\s*".*?"\s*)*\]', text, re.DOTALL)
+                if match:
+                    json_str = match.group(0)
+                else:
+                    json_str = text
+                
+                try:
+                    engines = json.loads(json_str)
+                except Exception:
+                    engines = re.findall(r'"([^"]+)"', json_str)
+                
+                if isinstance(engines, list) and len(engines) > 0:
+                    valid_engines = {
+                        'duckduckgo', 'startpage', 'bing', 'brave', 'mojeek', 'qwant', 'ecosia', 'searx',
+                        'wikipedia', 'wikidata', 'arxiv', 'openalex', 'semantic_scholar', 'pubmed', 'crossref',
+                        'core', 'stackexchange', 'reddit', 'hackernews', 'openlibrary', 'internet_archive', 'jina'
+                    }
+                    suggested = [str(e).strip().lower() for e in engines if str(e).strip().lower() in valid_engines]
+                    if suggested:
+                        # Ensure ALWAYS_ON_ENGINES are present
+                        for fallback in ['duckduckgo', 'startpage', 'wikipedia']:
+                            if fallback not in suggested:
+                                suggested.append(fallback)
+                        return suggested
+        except Exception as e:
+            print(f"[⚠️] Failed to classify query intent using AI: {e}")
+        return None
+
