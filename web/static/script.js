@@ -65,7 +65,8 @@ function updateEngineCounter() {
         count = systemLimits.fathom_max_nodes || 150;
     }
     
-    ec.textContent = count + ' محركات';
+    // الـ HTML يحتوي بالفعل على كلمة "محركات" بعد الرقم، لذا نضع الرقم فقط (منع التكرار).
+    ec.textContent = count;
 }
 
 function toggleKTrustedMode() {
