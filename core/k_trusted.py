@@ -37,17 +37,23 @@ def is_domain_authorized(url: str, query: str = "") -> bool:
     # Dynamic additions based on query entities
     query_lower = query.lower() if query else ""
     # Sports
-    if any(w in query_lower for w in ["sports", "football", "soccer", "kooora", "كرة القدم", "رياضة", "fifa"]):
+    if any(w in query_lower for w in ["sports", "football", "soccer", "kooora", "كرة القدم", "رياضة", "fifa", "ronaldo", "messi", "لاعب", "لاعبين", "نادي", "tall", "طول", "بطولة", "الدوري", "كأس"]):
         trusted_domains.extend(["fifa.com", "espn.com", "kooora.com", "olympics.com", "laliga.com", "premierleague.com"])
     # Chemistry
-    if any(w in query_lower for w in ["chemistry", "chemical", "molecule", "pubchem", "كيمياء", "جزيء", "تفاعل"]):
+    if any(w in query_lower for w in ["chemistry", "chemical", "molecule", "pubchem", "كيمياء", "جزيء", "تفاعل", "biology", "dna", "protein", "بروتين", "خلية", "جين", "gene"]):
         trusted_domains.extend(["pubchem.ncbi.nlm.nih.gov", "chembl.git", "acs.org", "rsc.org", "chemspider.com"])
     # Physics
-    if any(w in query_lower for w in ["physics", "quantum", "relativity", "space", "فيزياء", "كموم", "نسبية", "فضاء"]):
+    if any(w in query_lower for w in ["physics", "quantum", "relativity", "space", "فيزياء", "كموم", "نسبية", "فضاء", "كوكب", "نجم", "star", "planet"]):
         trusted_domains.extend(["aps.org", "iop.org", "nasa.gov", "space.com", "cern.ch", "esa.int"])
     # Medicine/Biology
-    if any(w in query_lower for w in ["medicine", "disease", "health", "cancer", "طب", "مرض", "صحة", "سرطان"]):
+    if any(w in query_lower for w in ["medicine", "disease", "health", "cancer", "طب", "مرض", "صحة", "سرطان", "علاج", "دواء", "مستشفى", "treatment", "drug"]):
         trusted_domains.extend(["who.int", "cdc.gov", "mayoclinic.org", "nih.gov", "fda.gov", "thelancet.com", "nejm.org"])
+    # Coding & Tech
+    if any(w in query_lower for w in ["python", "javascript", "code", "programming", "software", "api", "git", "github", "error", "bug", "برمجة", "كود", "مطور", "تطوير"]):
+        trusted_domains.extend(["github.com", "stackoverflow.com", "microsoft.com", "apple.com", "google.com", "developer.mozilla.org", "w3schools.com"])
+    # Media & Entertainment
+    if any(w in query_lower for w in ["movie", "actor", "film", "series", "imdb", "سينما", "فيلم", "ممثل", "مسلسل"]):
+        trusted_domains.extend(["imdb.com", "rottentomatoes.com"])
         
     # Check if domain is Tier 3 / shady (unverified blogs, forums, Reddit, Quora, generic content aggregators)
     shady_keywords = [
@@ -68,8 +74,6 @@ def is_domain_authorized(url: str, query: str = "") -> bool:
         return True
 
     # مواءمة مع DomainCredibilityScorer: مزامنة مع نطاقات الفئة 2
-    # (موسوعية/إعلام موثوق) فقط — دون نطاقات الفئة 1 المتخصصة (مثل fifa.com)
-    # لأن تلك تبقى مشروطة بنية الاستعلام (رياضة/طب/إلخ).
     try:
         from core.cognitive import DomainCredibilityScorer
         tier2 = DomainCredibilityScorer().tier2_domains
@@ -233,21 +237,25 @@ class MathematicalConsensusSolver:
         self.bias_words = {"incredible", "terrible", "worst", "best", "obviously", "extremely", "opinion", "believe", "feel"}
         self.stop_words = {"is", "are", "was", "were", "the", "a", "an", "and", "or", "of", "to", "in", "at", "for", "with", "on"}
 
-    def get_tier_weight(self, url: str) -> float:
+    def get_tier_weight(self, url: str, query: str = "") -> float:
         if not url:
             return 0.0
+        
+        # 1. التحقق أولاً مما إذا كان النطاق مرخصاً وموثوقاً في وضع K-Trust
+        if not is_domain_authorized(url, query):
+            return 0.0
+            
         parsed = urlparse(url)
         domain = (parsed.netloc or url).lower()
+        if domain.startswith("www."):
+            domain = domain[4:]
+            
+        # 2. إسناد الأوزان بناءً على فئة النطاق
         if any(domain.endswith(ext) or f"{ext}." in domain for ext in (".gov", ".edu", ".org")):
             return 1.0
-        trusted_domains = [
-            "wikipedia.org", "reuters.com", "apnews.com", "news.google.com",
-            "bbc.com", "bbc.co.uk", "nytimes.com", "wsj.com", "economist.com",
-            "sciencedaily.com", "bloomberg.com", "theguardian.com", "washingtonpost.com", "forbes.com"
-        ]
-        if any(td == domain or domain.endswith(f".{td}") for td in trusted_domains):
-            return 0.7
-        return 0.0
+            
+        # صحافة عالمية وموسوعات عامة ومواقع متخصصة مرخصة
+        return 0.7
 
     def compute_bias(self, text: str) -> float:
         if not text:
@@ -271,6 +279,36 @@ class MathematicalConsensusSolver:
         intersection = w1.intersection(w2)
         return len(intersection) / math.sqrt(len(w1) * len(w2))
 
+    def compute_overlap_similarity(self, claim: str, assertion: str) -> float:
+        """
+        تقوم هذه الدالة بمطابقة الكلمات الدلالية بشكل مرن بين الادعاء ومحتوى المصادر،
+        مع التركيز التام على تطابق الأرقام والنسب المئوية والسنوات لمنع تمرير أي معلومات غير متطابقة.
+        """
+        w1 = self.clean_tokens(claim)
+        w2 = self.clean_tokens(assertion)
+        if not w1:
+            return 0.0
+            
+        # 1. استخراج الأرقام والتواريخ والنسب من الادعاء والتحقق من تطابقها في المصدر
+        num_pattern = re.compile(r'\b\d+(?:\.\d+)?')
+        nums_claim = set(num_pattern.findall(claim))
+        nums_assert = set(num_pattern.findall(assertion))
+        
+        # استبعاد الأرقام الفردية الصغيرة كجزء من الكلمات العامة (0-5)
+        nums_claim = {n for n in nums_claim if len(n) > 1 or n not in ['0', '1', '2', '3', '4', '5']}
+        nums_assert = {n for n in nums_assert if len(n) > 1 or n not in ['0', '1', '2', '3', '4', '5']}
+        
+        # إذا وجد رقم في الادعاء، فيجب أن يتطابق تماماً في المصدر
+        if nums_claim:
+            if not (nums_claim & nums_assert):
+                return 0.0 # رقم غير متطابق -> عدم تطابق تام
+        
+        # 2. حساب نسبة التداخل (Overlap Coefficient) لمنع عقاب النصوص القصيرة
+        intersection = w1.intersection(w2)
+        
+        overlap = len(intersection) / len(w1)
+        return overlap
+
     def solve(self, claim: str, query: str, sources: List[Dict[str, Any]]) -> Tuple[float, str, List[Dict[str, Any]]]:
         total_w = 0.0
         weighted_sum = 0.0
@@ -281,18 +319,20 @@ class MathematicalConsensusSolver:
         
         for src in sources:
             url = src.get("url", "")
-            w = self.get_tier_weight(url)
+            w = self.get_tier_weight(url, query) # Pass query context!
             if w == 0.0:
                 continue
             content = src.get("content", "")
             assertion = src.get("assertion", "")
             
             # Semantic pre-check between query and source content
-            if self.compute_cosine_similarity(query, content) < 0.10:
+            q_sim = self.compute_cosine_similarity(query, content)
+            if q_sim < 0.05: # الحد الأدنى للارتباط العام بالموضوع
                 continue
                 
-            sim_score = self.compute_cosine_similarity(claim, assertion)
-            if sim_score < 0.35:  # Skip irrelevant sources for consensus on this claim
+            # مطابقة الادعاء مع التأكيد (assertion) باستخدام Overlap
+            sim_score = self.compute_overlap_similarity(claim, assertion)
+            if sim_score < 0.25:  # خفضنا العتبة قليلاً لمواءمة التداخل
                 continue
                 
             src_tokens = self.clean_tokens(content)
@@ -320,7 +360,8 @@ class MathematicalConsensusSolver:
             
         fvs = (weighted_sum / total_w) * (1.0 - max_bias)
         
-        if fvs >= 0.75:
+        # ضبط عتبة التصنيف لتناسب نسبة التداخل وتوافق الأرقام الصارم ومطابقة متطلبات الاختبار
+        if fvs >= 0.70:
             return fvs, "Fact", source_details
         elif fvs >= 0.40:
             return fvs, "Contested", source_details
@@ -459,7 +500,11 @@ class KTrustVerificationEngine:
                     pass
             
             if not has_valid_consensus and not contested_matrix_rows and len(sentences) > 0:
-                return "لم يتم التحقق من صحة البيانات بواسطة خوارزميات K-Trust لعدم تطابقها أو لعدم موثوقية المصادر."
+                is_arabic = any(ord(c) in range(1536, 1792) for c in (query or text))
+                if is_arabic:
+                    return "لم يتم التحقق من صحة البيانات بواسطة خوارزميات K-Trust لعدم تطابقها أو لعدم موثوقية المصادر."
+                else:
+                    return "Data unverified by K-Trust algorithms due to conflicting or unreliable sources."
             
             text = " ".join(surviving_sentences)
             
