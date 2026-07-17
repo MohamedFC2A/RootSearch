@@ -852,6 +852,25 @@ function startSSEStream(query, model, attempt = 0) {
                 // Build answer text
                 const answerHtml = DOMPurify.sanitize(marked.parse(directAnswer.answer || ''));
 
+                // Build thinking steps accordion
+                let thinkingHtml = '';
+                if (directAnswer.thinking) {
+                    thinkingHtml = `
+                        <div class="da-thinking-box" id="daThinkingBox">
+                            <div class="da-thinking-header" onclick="toggleThinkingBox()">
+                                <span class="da-thinking-header-title">
+                                    <i class="fas fa-microchip da-thinking-icon"></i>
+                                    خطوات تفكير وتحليل الذكاء الاصطناعي (DeepSeek R1 Thinking)
+                                </span>
+                                <i class="fas fa-chevron-down da-thinking-chevron" id="daThinkingChevron"></i>
+                            </div>
+                            <div class="da-thinking-content" id="daThinkingContent" style="display: none;">
+                                ${DOMPurify.sanitize(marked.parse(directAnswer.thinking))}
+                            </div>
+                        </div>
+                    `;
+                }
+
                 // Build sources list
                 const sources = directAnswer.sources || [];
                 let sourcesHtml = '';
@@ -867,6 +886,7 @@ function startSSEStream(query, model, attempt = 0) {
 
                 aiOverviewBody.innerHTML = `
                     <div class="da-answer-text">${answerHtml}</div>
+                    ${thinkingHtml}
                     ${confBar}
                     ${sourcesHtml}`;
                 aiOverview.style.display = 'block';
@@ -1013,9 +1033,28 @@ function renderAnalysis(report) {
     const rootbaseEl = document.getElementById('fuckenbaseContent');
     if (rootbaseEl) {
         const deep = analysis.deep_analysis || analysis.fuckenbase_analysis || '';
-        rootbaseEl.innerHTML = deep
-            ? DOMPurify.sanitize(marked.parse(deep))
-            : '<p style="color:var(--text-muted)">لا يوجد تحليل عميق متاح.</p>';
+        const thinking = analysis.thinking || '';
+        
+        let htmlContent = '';
+        if (thinking) {
+            htmlContent += `
+                <div class="da-thinking-box" id="reportThinkingBox" style="margin-top:0;margin-bottom:var(--sp-4)">
+                    <div class="da-thinking-header" onclick="toggleReportThinking()">
+                        <span class="da-thinking-header-title">
+                            <i class="fas fa-microchip da-thinking-icon"></i>
+                            خطوات تفكير وتحليل التقرير (DeepSeek R1 Thinking)
+                        </span>
+                        <i class="fas fa-chevron-down da-thinking-chevron" id="reportThinkingChevron"></i>
+                    </div>
+                    <div class="da-thinking-content" id="reportThinkingContent" style="display: none;">
+                        ${DOMPurify.sanitize(marked.parse(thinking))}
+                    </div>
+                </div>
+            `;
+        }
+        
+        htmlContent += deep ? DOMPurify.sanitize(marked.parse(deep)) : '<p style="color:var(--text-muted)">لا يوجد تحليل عميق متاح.</p>';
+        rootbaseEl.innerHTML = htmlContent;
     }
 
     // Keywords
@@ -3773,4 +3812,36 @@ function selectMobileCategory(cat) {
     const btnMock = document.createElement('button');
     filterByCategory(cat, btnMock);
     closeFilterSheet();
+}
+
+function toggleThinkingBox() {
+    const box = document.getElementById('daThinkingBox');
+    const content = document.getElementById('daThinkingContent');
+    const chevron = document.getElementById('daThinkingChevron');
+    if (!box || !content || !chevron) return;
+    
+    const isExpanded = box.classList.contains('is-expanded');
+    if (isExpanded) {
+        box.classList.remove('is-expanded');
+        content.style.display = 'none';
+    } else {
+        box.classList.add('is-expanded');
+        content.style.display = 'block';
+    }
+}
+
+function toggleReportThinking() {
+    const box = document.getElementById('reportThinkingBox');
+    const content = document.getElementById('reportThinkingContent');
+    const chevron = document.getElementById('reportThinkingChevron');
+    if (!box || !content || !chevron) return;
+    
+    const isExpanded = box.classList.contains('is-expanded');
+    if (isExpanded) {
+        box.classList.remove('is-expanded');
+        content.style.display = 'none';
+    } else {
+        box.classList.add('is-expanded');
+        content.style.display = 'block';
+    }
 }

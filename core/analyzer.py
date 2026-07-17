@@ -264,6 +264,166 @@ class AIAnalyzer:
         entities['organizations'] = list(set(re.findall(org_pattern, text)))
         
         return entities
+
+    def _tokenize_and_normalize(self, text: str) -> List[str]:
+        """تطبيع النصوص العربية والإنجليزية وإزالة علامات الترقيم"""
+        if not text:
+            return []
+        punc = ".,?!،؟:;()[]{}'\"-_/\\«»"
+        for p in punc:
+            text = text.replace(p, " ")
+        text = text.replace("أ", "ا").replace("إ", "ا").replace("آ", "ا")
+        text = text.replace("ة", "ه").replace("ى", "ي")
+        return text.lower().split()
+
+    def _extract_thinking_and_response(self, text: str) -> Tuple[str, str]:
+        """
+        يستخرج محتويات تتبع التفكير <think>...</think> من النص
+        ويفصلها عن الإجابة النهائية.
+        """
+        if not text:
+            return "", ""
+        
+        thinking = ""
+        response = text
+        
+        # 1. دعم وسم <think>...</think>
+        think_match = re.search(r'<think>(.*?)</think>', text, re.DOTALL | re.IGNORECASE)
+        if think_match:
+            thinking = think_match.group(1).strip()
+            response = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL | re.IGNORECASE).strip()
+        else:
+            # 2. دعم وسم <thinking>...</thinking>
+            thinking_match = re.search(r'<thinking>(.*?)</thinking>', text, re.DOTALL | re.IGNORECASE)
+            if thinking_match:
+                thinking = thinking_match.group(1).strip()
+                response = re.sub(r'<thinking>.*?</thinking>', '', text, flags=re.DOTALL | re.IGNORECASE).strip()
+                
+        return response, thinking
+
+    def cross_match_paragraphs(self, results: List[SearchResult], query: str) -> str:
+        """
+        يقوم هذا التابع بتقسيم محتويات صفحات الويب المستخرجة إلى فقرات، وتصفيتها حسب صلتها بالاستعلام،
+        ثم مقارنتها ببعضها محلياً للكشف عن الاتفاقات والتعارضات (في الأرقام، التواريخ، أو الكلمات المفتاحية الرئيسية).
+        """
+        import string
+        from urllib.parse import urlparse
+        
+        # 1. استخراج الجمل أو الكلمات المفتاحية للاستعلام لتحديد الصلة
+        query_words = set(self._tokenize_and_normalize(query))
+        query_words = {w for w in query_words if len(w) > 2}
+        
+        # 2. تفكيك كافة النتائج إلى فقرات مرشحة
+        all_paragraphs = []
+        for result in results:
+            content = result.content or result.snippet or ""
+            if not content:
+                continue
+            
+            # تقسيم المحتوى لفقرات
+            paragraphs = [p.strip() for p in re.split(r'\n+|\r+', content) if p.strip()]
+            domain = urlparse(result.url).netloc or result.source
+            
+            for p in paragraphs:
+                if len(p) < 60 or len(p) > 1000:
+                    continue
+                # حساب مدى ارتباط الفقرة بالاستعلام
+                p_words = set(self._tokenize_and_normalize(p))
+                overlap = len(p_words.intersection(query_words))
+                if overlap > 0:
+                    all_paragraphs.append({
+                        'domain': domain,
+                        'text': p,
+                        'words': p_words,
+                        'url': result.url
+                    })
+        
+        if not all_paragraphs:
+            return ""
+
+        # 3. محاولة العثور على الأرقام والتواريخ لمقارنتها إحصائياً وكشف التعارضات
+        num_pattern = re.compile(r'\b\d+(?:\.\d+)?')
+        date_pattern = re.compile(r'\b(?:19|20)\d{2}\b') # سنوات
+        
+        number_groups = {} # number -> list of paragraphs/domains mentioning it
+        date_groups = {}   # year -> list of paragraphs/domains mentioning it
+        
+        for p in all_paragraphs:
+            # استخراج السنوات
+            years = date_pattern.findall(p['text'])
+            for y in set(years):
+                if y not in date_groups:
+                    date_groups[y] = []
+                date_groups[y].append(p)
+            
+            # استخراج الأرقام العامة (مع استثناء السنوات لتجنب التكرار)
+            numbers = num_pattern.findall(p['text'])
+            for num in set(numbers):
+                if num in years:
+                    continue
+                if len(num) == 1 and num in ['0', '1', '2', '3', '4', '5']:
+                    continue
+                if num not in number_groups:
+                    number_groups[num] = []
+                number_groups[num].append(p)
+
+        # 4. بناء تقرير التعارضات والتوافق المحلي
+        report_lines = []
+        report_lines.append("### مصفوفة التحقق المتقاطع والمطابقة المحلية (Local Cross-Matching Matrix):")
+        
+        # أ) تحليل التوافق والتعارض في الأرقام الهامة
+        significant_numbers = {num: ps for num, ps in number_groups.items() if len(ps) >= 2}
+        if significant_numbers:
+            report_lines.append("\n* **توافقات وتكرارات رقمية متطابقة (Consensus Numbers):**")
+            sorted_nums = sorted(significant_numbers.items(), key=lambda x: len(x[1]), reverse=True)[:5]
+            for num, ps in sorted_nums:
+                unique_domains = list(set(p['domain'] for p in ps))
+                sample_text = ""
+                for p in ps:
+                    sentences = re.split(r'[.!?؟]', p['text'])
+                    for s in sentences:
+                        if num in s:
+                            sample_text = s.strip()[:100]
+                            break
+                    if sample_text:
+                        break
+                report_lines.append(f"  - الرقم **{num}** ظهر متطابقاً في {len(unique_domains)} مصادر: `{', '.join(unique_domains)}` | السياق: \"{sample_text}\"")
+
+        # ب) الكشف عن تعارضات محتملة
+        report_lines.append("\n* **التحقق من التعارضات المحتملة (Potential Conflicts Detection):**")
+        conflict_found = False
+        
+        num_contexts = {}
+        for num, ps in number_groups.items():
+            context_words = set()
+            for p in ps:
+                words_around = set(self._tokenize_and_normalize(p['text']))
+                words_around = {w for w in words_around if not w.isdigit() and w not in query_words}
+                context_words.update(words_around)
+            num_contexts[num] = context_words
+
+        checked_pairs = set()
+        for num1, ctx1 in num_contexts.items():
+            for num2, ctx2 in num_contexts.items():
+                if num1 == num2 or (num2, num1) in checked_pairs:
+                    continue
+                checked_pairs.add((num1, num2))
+                
+                if not ctx1 or not ctx2:
+                    continue
+                jaccard = len(ctx1.intersection(ctx2)) / len(ctx1.union(ctx2))
+                if jaccard > 0.18:
+                    domains1 = list(set(p['domain'] for p in number_groups[num1]))
+                    domains2 = list(set(p['domain'] for p in number_groups[num2]))
+                    
+                    if set(domains1) != set(domains2):
+                        conflict_found = True
+                        report_lines.append(f"  - ⚠️ تعارض محتمل: تم رصد القيمة **{num1}** في مصادر `{', '.join(domains1)}` بينما رُصدت القيمة **{num2}** في مصادر `{', '.join(domains2)}` لنفس السياق تقريباً.")
+
+        if not conflict_found:
+            report_lines.append("  - لم يتم رصد أي تعارضات رقمية صارخة بين المصادر المستخرجة محلياً.")
+            
+        return "\n".join(report_lines)
     
     def analyze_sentiment(self, text: str) -> Dict[str, Any]:
         """تحليل المشاعر (إيجابي/سلبي/محايد) باستخدام قاموس المشاعر مع دعم النفي والتحليلات العاطفية والموضوعية"""
@@ -519,6 +679,12 @@ class AIAnalyzer:
 
         sources_block = "\n\n".join(source_lines)
 
+        # Generate local cross-matching data
+        cross_match_data = self.cross_match_paragraphs(top_results, query)
+        cross_match_block = ""
+        if cross_match_data:
+            cross_match_block = f"\n=== نتائج المطابقة والتحقق المتقاطع المحلي للبيانات ===\n{cross_match_data}\n=======================================================\n"
+
         verification_clause = ""
         if k_trusted:
             verification_clause = (
@@ -528,33 +694,37 @@ class AIAnalyzer:
                 "3. تجنب تماماً الصياغات العامة والإنشائية، وركز فقط على المعلومات الموثقة والمحققة بنسبة 100%."
             )
 
-        prompt = f"""أنت محرك إجابات مرجعية فورية. مهمتك: قدّم الإجابة المباشرة والصحيحة لاستعلام المستخدم بناءً على المصادر أدناه.
+        prompt = f"""أنت محرك إجابات مرجعية فورية مع التفكير التحليلي العميق. مهمتك: قدّم الإجابة المباشرة والصحيحة لاستعلام المستخدم بناءً على المصادر ونتائج المطابقة المحلية أدناه.
+
+[هام جداً] يجب أن تبدأ إجابتك بكتابة سلسلة التفكير والتحليل الداخلي بالكامل باللغة العربية داخل وسم التفكير <think>...</think>، ثم تتبعها بالإجابة المباشرة النهائية للمستخدم بعد إغلاق الوسم.
 
 قواعد صارمة لا تحيد عنها:
-1. الإجابة يجب أن تكون مباشرة ودقيقة — ابدأ بالحقيقة فوراً، لا مقدمات ولا حشو.
-2. الحد الأقصى 5 جمل موجزة. لا تشرح آلية عملك ولا تعيد صياغة السؤال.
-3. اذكر الأرقام والحقائق الدقيقة (أوزان، أطوال، تواريخ، نسب) بوحداتها الصحيحة دائماً.
-4. إذا كانت الإجابة غير موجودة في المصادر، قل: "لا تتوفر بيانات موثوقة كافية للإجابة على هذا الاستعلام."
-5. لا تخترع ولا تستنتج ولا تضيف معلومات خارج المصادر المقدمة.
-6. استخدم العربية الفصحى الواضحة.{verification_clause}
+1. داخل وسم <think>: اشرح خطوة بخطوة كيف قارنت المصادر، وكيف قمت بحل أي تعارضات رقمية أو معلوماتية، وما هي الحقائق المؤكدة التي استنتجتها.
+2. بعد إغلاق وسم </think>: اكتب الإجابة المباشرة والدقيقة والنهائية للمستخدم.
+3. الإجابة النهائية يجب أن تبدأ بالحقيقة فوراً، بدون مقدمات ولا حشو، والحد الأقصى 5 جمل موجزة.
+4. اذكر الأرقام والحقائق الدقيقة بوحداتها الصحيحة دائماً.
+5. إذا كانت الإجابة غير موجودة في المصادر، قل: "لا تتوفر بيانات موثوقة كافية للإجابة على هذا الاستعلام."
+6. لا تخترع ولا تستنتج ولا تضيف معلومات خارج المصادر المقدمة.{verification_clause}
 
 الاستعلام: {query}
-
+{cross_match_block}
 المصادر:
 {sources_block}
 
-الإجابة المرجعية المباشرة:"""
+خطوات التفكير والإجابة المرجعية:"""
 
         try:
             if not self.nlp_initialized:
                 await self.initialize()
             answer_text = await self._call_llm(prompt)
             if answer_text:
+                answer_text, thinking = self._extract_thinking_and_response(answer_text)
                 answer_text = answer_text.strip()
                 # Confidence heuristic: high if we have many sources and k_trusted
                 confidence = min(1.0, 0.6 + 0.05 * len(top_results) + (0.1 if k_trusted else 0))
                 return {
                     'answer': answer_text,
+                    'thinking': thinking,
                     'sources': cited_sources[:5],
                     'verified': k_trusted,
                     'confidence': round(confidence, 2),
@@ -570,11 +740,12 @@ class AIAnalyzer:
             domain = urlparse(getattr(r, 'url', '')).netloc or getattr(r, 'source', '')
             return {
                 'answer': snip or 'لا تتوفر بيانات موثوقة كافية للإجابة على هذا الاستعلام.',
+                'thinking': '',
                 'sources': cited_sources[:3],
                 'verified': False,
                 'confidence': 0.3,
             }
-        return {'answer': '', 'sources': [], 'verified': False, 'confidence': 0.0}
+        return {'answer': '', 'thinking': '', 'sources': [], 'verified': False, 'confidence': 0.0}
 
     async def summarize_text(self, text: str, max_length: int = 300, min_length: int = 50, query: str = "", is_synthesis: bool = False) -> str:
         """تلخيص النص باستخدام AI (مع fallback لتقنية الاستخراج)"""
@@ -974,10 +1145,19 @@ Webpage content to process:
 
             # إضافة تحليل عميق (ROOTBASE / Deep Analysis)
             if config.use_ai_analysis:
+                # Generate local cross-matching data
+                cross_match_data = self.cross_match_paragraphs(results, query)
+                cross_match_block = ""
+                if cross_match_data:
+                    cross_match_block = f"\n=== نتائج المطابقة والتحقق المتقاطع المحلي للبيانات ===\n{cross_match_data}\n=======================================================\n"
+
                 try:
                     if k_trusted:
                         deep_prompt = f"""You are the K-Trusted Super-Verification AI Layer — an elite truth auditor, cognitive synthesizer, and data engineer.
 Your task is to analyze the gathered search results for the query "{query}" and generate a world-class, 100% verified intelligence report in Arabic.
+
+[IMPORTANT] You must start your response with your detailed step-by-step thinking process in Arabic inside a <think>...</think> block, and then follow it with the final markdown report.
+
 You are running under K-Trusted Mode. You must enforce these strict verification invariants:
 
 1. Consensus Check: Cross-reference facts and numbers across a minimum of 5 independent authorized sources.
@@ -1002,11 +1182,16 @@ You are running under K-Trusted Mode. You must enforce these strict verification
 
 Do NOT include any generic placeholders.
 
+{cross_match_block}
+
 Gathered search data:
 {all_content[:25000]}"""
                     elif model == "fathom_max":
                         deep_prompt = f"""You are the Fathom Max Ultimate Intelligence Engine — an elite cognitive synthesizer, data engineer, and truth verification analyst.
 Your task is to analyze the gathered search results for the query "{query}" and generate a world-class, radically detailed intelligence report in Arabic.
+
+[IMPORTANT] You must start your response with your detailed step-by-step thinking process in Arabic inside a <think>...</think> block, and then follow it with the final markdown report.
+
 You are a partner in designing this report's layout and TXT presentation format. You must dynamically adapt the report's design and structure based on the query domain (e.g., scientific research, code/architecture audits, financial analysis, or history).
 
 Design requirements for Fathom Max:
@@ -1028,11 +1213,16 @@ Design requirements for Fathom Max:
 
 Do NOT output any of the instruction placeholders or generic templates. Customize the content, tables, and design completely for this search.
 
+{cross_match_block}
+
 Gathered search data:
 {all_content[:25000]}"""
                     else:
                         deep_prompt = f"""You are an elite research director and intelligence analyst.
 Perform a world-class deep cognitive analysis (ROOTBASE Analysis) for the query "{query}" based on the following search data.
+
+[IMPORTANT] You must start your response with your detailed step-by-step thinking process in Arabic inside a <think>...</think> block, and then follow it with the final markdown report.
+
 You must construct an extremely rigorous, analytical, and highly structured report in Arabic. Do NOT output any of the instruction placeholders in brackets or asterisks verbatim; replace them entirely with your custom analytical paragraphs.
 
 Strictly format the output using this template:
@@ -1058,12 +1248,16 @@ Write your deep critical analysis of the core hypothesis and current trends here
 ---
 Ensure professional markdown formatting, using empty lines between paragraphs to avoid text overlapping.
 
+{cross_match_block}
+
 المحتوى المجمع:
 {all_content[:15000]}"""
                     deep_analysis_text = await self._call_llm(deep_prompt)
                     if deep_analysis_text:
+                        deep_analysis_text, thinking = self._extract_thinking_and_response(deep_analysis_text)
                         report['deep_analysis'] = deep_analysis_text
                         report['fuckenbase_analysis'] = deep_analysis_text
+                        report['thinking'] = thinking
                 except Exception as e:
                     print(f"[!] فشل إنشاء التحليل العميق بواسطة الـ AI: {e}")
 
