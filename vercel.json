@@ -1,7 +1,14 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": null,
+  "cleanUrls": true,
   "installCommand": "echo no-install-needed",
-  "buildCommand": "mkdir -p public/static && (cp web/templates/index.html public/index.html || cp templates/index.html public/index.html) && (cp -r web/static/. public/static/ || cp -r static/. public/static/)",
-  "outputDirectory": "public"
+  "buildCommand": "mkdir -p public/static && cp web/templates/*.html public/ && cp -r web/static/. public/static/",
+  "outputDirectory": "public",
+  "rewrites": [
+    { "source": "/compare", "destination": "/compare.html" },
+    { "source": "/search", "destination": "/index.html" },
+    { "source": "/results", "destination": "/results.html" },
+    { "source": "/(.*)", "destination": "/index.html" }
+  ]
 }
