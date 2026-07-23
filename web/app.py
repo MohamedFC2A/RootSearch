@@ -66,8 +66,6 @@ app = FastAPI(
 # ───────────────────────────────────────────
 #  CORS — يسمح للواجهة المستضافة على Vercel بمخاطبة
 #  هذا الباك-اند المحلي عبر النفق (Tunnel).
-#  افتراضيًا "*" (أي أصل)؛ يمكن تقييدها عبر متغير البيئة
-#  ALLOWED_ORIGINS="https://your-app.vercel.app"
 # ───────────────────────────────────────────
 _origins_env = os.getenv("ALLOWED_ORIGINS", "*").strip()
 _allow_origins = ["*"] if _origins_env == "*" else [
@@ -108,11 +106,6 @@ app.mount("/static", StaticFiles(directory=static_path), name="static")
 # ─────────────────────────────────
 #  SHARED ENGINE POOL (non-streaming endpoint)
 # ─────────────────────────────────
-# The non-streaming /api/search used to build AND tear down a full RootSearch
-# (aiohttp session + connector) on every request — no connection reuse and heavy
-# per-request TLS setup. We keep one lazily-created shared instance instead.
-# The streaming endpoint deliberately keeps its own per-request engine because it
-# needs an isolated on_event callback per SSE connection.
 _shared_engine: Optional[RootSearch] = None
 _engine_lock = asyncio.Lock()
 
@@ -126,8 +119,6 @@ async def get_shared_engine() -> RootSearch:
                 _shared_engine = RootSearch()
     return _shared_engine
 
-
-# Lifespan context manager handles engine and session shutdown cleanly.
 
 # ─────────────────────────────────────────────
 #  LRU CACHE
@@ -249,7 +240,6 @@ async def compare(request: Request):
     return RedirectResponse(url="/", status_code=303)
 
 
-
 @app.get("/api/search")
 async def api_search(
     q: str = Query(..., min_length=20, max_length=500),
@@ -269,7 +259,6 @@ async def api_search(
             return JSONResponse(cached)
 
     try:
-        # Reuse the pooled engine (connection reuse; no per-request session teardown).
         engine = await get_shared_engine()
         report = await engine.deep_search(q, model=model, deep_analysis=True, k_trusted=k_trusted)
 
@@ -299,8 +288,12 @@ async def api_search_stream(
 ):
     """
     5-stage Live Search Tree SSE stream:
-      [Trigger] → [Source Discovery] → [Extraction] → [Semantic Analysis] → [Verification]
-    Each stage emits tree_node / node_status_update / tree_edge events consumed by the frontend.
+      Stage 0: Trigger (start)
+      Stage 1: Source Discovery (search_progress)
+      Stage 2: Extraction (scrape_progress)
+      Stage 3: Semantic Analysis & Synthesis (synthesis_chunk)
+      Stage 4: Fact Verification & Report Assembly (complete)
+    Emits tree_node / node_status_update / tree_edge / synthesis_chunk / complete SSE events.
     """
     q = q.strip()
     cache_key = f"{q.lower()}:{model}:1:{k_trusted}"
@@ -309,6 +302,7 @@ async def api_search_stream(
     _cached_entry = None if nocache else _cache_get(cache_key)
     if _cached_entry is not None:
         async def _cached():
+            yield _sse("start", {"status": "start", "query": q, "model": model, "k_trusted": k_trusted, "cached": True})
             yield _tree_node("trigger", "trigger", "success", "تم بدء الاستعلام (مسترجع من الذاكرة)", None)
             yield _sse("progress", {"status": "start", "message": "استرجاع من الذاكرة المؤقتة..."})
             await asyncio.sleep(0.05)
@@ -319,7 +313,7 @@ async def api_search_stream(
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"},
         )
 
-    # ── Event queue: backend → SSE generator (maxsize=1000 for backpressure safety) ──
+    # ── Event queue: backend → SSE generator ──
     event_queue: asyncio.Queue = asyncio.Queue(maxsize=1000)
 
     def on_event(event_type: str, payload: Dict[str, Any]) -> None:
@@ -327,7 +321,7 @@ async def api_search_stream(
         try:
             event_queue.put_nowait((event_type, payload))
         except asyncio.QueueFull:
-            pass  # Prevent queue inflation if client reads slowly
+            pass  # Prevent queue inflation
 
     async def pipeline():
         """Run the full 5-stage search pipeline, feeding events into the queue."""
@@ -336,7 +330,15 @@ async def api_search_stream(
         scrape_tasks: list = []
 
         try:
-            # ── STAGE 0: Trigger ──
+            # ── STAGE 0: Trigger & Start ──
+            event_queue.put_nowait(("start", {
+                "status": "start",
+                "query": q,
+                "model": model,
+                "k_trusted": k_trusted,
+                "timestamp": datetime.now().isoformat()
+            }))
+
             event_queue.put_nowait(("tree_node", {
                 "nodeId": "trigger",
                 "stage": "trigger",
@@ -359,22 +361,17 @@ async def api_search_stream(
             from core.analyzer import AIAnalyzer
             analyzer = AIAnalyzer()
             
-            # 1. AI-powered query intent diagnosis to dynamically route engines
+            # AI-powered query intent diagnosis
             ai_suggested = None
             try:
                 ai_suggested = await asyncio.wait_for(
                     analyzer.classify_query_intent_ai(q),
                     timeout=3.0
                 )
-                if ai_suggested:
-                    print(f"[AI Intent Diagnosis] Dynamic search engines selected: {ai_suggested}")
-            except asyncio.TimeoutError:
-                print("[AI Intent Timeout] Query intent diagnosis took too long, falling back to rule-based classification.")
-            except Exception as e:
-                print(f"[AI Intent Error] Query intent diagnosis failed: {e}")
+            except Exception:
+                pass
 
-            # Perform query expansion (branching) with a strict 4-second timeout to prevent blocking
-            subqueries = [q]  # Always include the original query
+            subqueries = [q]
             try:
                 expanded = await asyncio.wait_for(
                     analyzer.expand_query(q, model=model),
@@ -382,21 +379,13 @@ async def api_search_stream(
                 )
                 if expanded:
                     subqueries.extend(expanded)
-            except asyncio.TimeoutError:
-                print("[Query Expansion Timeout] AI query expansion took too long, proceeding with original query immediately.")
-            except Exception as e:
-                print(f"[Query Expansion Error] {e}")
+            except Exception:
+                pass
 
-            # سجل كامل لدوال المحركات (نفس أسماء search_all) لتوحيد
-            # اختيار المصادر مع المسار غير المتدفق ومنع تلوث النتائج.
             se = engine.search_engine
-            # Engine map + intent-based selection reuse the single source of truth on
-            # the SearchEngine (engine_methods/select_engines), so this streaming
-            # pipeline can never drift from search_all's engine list.
             all_engine_funcs = se.engine_methods()
             engine_funcs = se.select_engines(q, suggested_engines=ai_suggested)
 
-            # Ensure representative engines for each category are included for the main query to populate all categories in the UI
             additional_engines = ["reddit", "stackexchange", "arxiv", "openlibrary", "jina", "ecosia", "qwant"]
             expanded_suggested = list(engine_funcs.keys())
             for eng in additional_engines:
@@ -404,7 +393,6 @@ async def api_search_stream(
                     expanded_suggested.append(eng)
             engine_funcs = se.select_engines(q, suggested_engines=expanded_suggested)
 
-            # محركات مختصرة للاستعلامات الفرعية (أفضل 3) للحد من التشعّب التوافقي.
             _primary_order = ["startpage", "duckduckgo", "wikipedia", "bing", "brave", "searx"]
             primary_engine_funcs = {
                 name: engine_funcs[name]
@@ -417,7 +405,6 @@ async def api_search_stream(
 
             timeout_val = 45.0 if model == "fathom_max" else 20.0
 
-            # Emit the subquery nodes
             for idx, sq in enumerate(subqueries):
                 sq_id = f"subquery_{idx}"
                 event_queue.put_nowait(("tree_node", {
@@ -459,12 +446,6 @@ async def api_search_stream(
                         "metadata": {"count": len(res)},
                     }))
                     return name, res
-                except asyncio.TimeoutError:
-                    event_queue.put_nowait(("node_status_update", {
-                        "nodeId": engine_node_id, "status": "failed",
-                        "label": f"{disp}: انتهت المهلة",
-                    }))
-                    return name, []
                 except Exception as exc:
                     event_queue.put_nowait(("node_status_update", {
                         "nodeId": engine_node_id, "status": "failed",
@@ -474,8 +455,6 @@ async def api_search_stream(
 
             search_tasks = []
             for sub_idx, sub_text in enumerate(subqueries):
-                # الاستعلام الأصلي (0) يستخدم كامل محركات النية؛
-                # الاستعلامات الفرعية تستخدم أفضل 3 محركات فقط (ضبط التشعّب).
                 active_funcs = engine_funcs if sub_idx == 0 else primary_engine_funcs
                 for name, func in active_funcs.items():
                     task = asyncio.create_task(run_engine(sub_idx, sub_text, name, func))
@@ -492,7 +471,6 @@ async def api_search_stream(
                 all_results.extend(res)
                 sources_counts[name] = sources_counts.get(name, 0) + len(res)
 
-            # GraphCrawler scoring
             from core.search_engine import GraphCrawler
             crawler_nodes = 1000 if k_trusted else (800 if model == "fathom_max" else 300)
             crawler = GraphCrawler(query=q, max_nodes=crawler_nodes, on_event=on_event)
@@ -509,8 +487,9 @@ async def api_search_stream(
                 "label": f"تم اكتشاف {total} مصدر فريد عبر {len(subqueries)} تفريعات استعلام",
                 "metadata": {"total": total, "sources": sources_counts},
             }))
-            event_queue.put_nowait(("progress", {
-                "status": "search_done",
+
+            event_queue.put_nowait(("search_progress", {
+                "status": "search_progress",
                 "count": total,
                 "sources": sources_counts,
                 "message": f"تم العثور على {format_scary_count_ar(total)} مصدر من {len(subqueries)} تفريعات",
@@ -520,7 +499,7 @@ async def api_search_stream(
                 event_queue.put_nowait(("node_status_update", {
                     "nodeId": "source_discovery",
                     "status": "processing",
-                    "label": "جاري التصفية الدلالية والتدقيق للمصادر بالذكاء الاصطناعي (DeepSeek)..."
+                    "label": "جاري التصفية الدلالية والتدقيق للمصادر بالذكاء الاصطناعي..."
                 }))
                 try:
                     all_results = await analyzer.filter_sources_ai(q, all_results, max_seeds=20)
@@ -559,7 +538,6 @@ async def api_search_stream(
 
             enriched = []
             if model == "fathom_max":
-                # Fathom Max (Abyss Engine): Deep recursive crawling with live link tracing
                 event_queue.put_nowait(("node_status_update", {
                     "nodeId": "extraction",
                     "status": "fetching",
@@ -586,7 +564,6 @@ async def api_search_stream(
                     "metadata": {"ok": scraped_ok, "total": len(enriched)}
                 }))
             else:
-                # Fathom S1 (Lightning Engine): Highly concurrent shallow crawling
                 s1_max = 50 if k_trusted else config.fathom_s1_max_sources
                 to_scrape = sorted(all_results, key=lambda r: r.relevance_score, reverse=True)[:s1_max]
                 event_queue.put_nowait(("node_status_update", {
@@ -627,7 +604,6 @@ async def api_search_stream(
                                 "snippet": res.snippet,
                                 "relevance_score": res.relevance_score,
                             })
-                            # Keep success event status update
                             event_queue.put_nowait(("node_status_update", {
                                 "nodeId": nid,
                                 "status": "success",
@@ -679,14 +655,13 @@ async def api_search_stream(
                 for coro in asyncio.as_completed(scrape_tasks):
                     res = await coro
                     enriched.append(res)
-                    # State Hydration for S1
                     try:
                         scraped_so_far = [r for r in enriched if r.metadata.get("scraped")]
                         if scraped_so_far:
                             report = await engine.aggregator.aggregate(scraped_so_far, q, final_analysis=False, k_trusted=k_trusted)
                             event_queue.put_nowait(("partial_results", report))
-                    except Exception as ae:
-                        print(f"[Hydration S1 Error] {ae}")
+                    except Exception:
+                        pass
 
                 scraped_ok = sum(1 for r in enriched if r.metadata.get("scraped"))
                 event_queue.put_nowait(("node_status_update", {
@@ -695,8 +670,13 @@ async def api_search_stream(
                     "label": f"تم استخراج {scraped_ok}/{len(to_scrape)} صفحة",
                     "metadata": {"ok": scraped_ok, "total": len(to_scrape)},
                 }))
+                event_queue.put_nowait(("scrape_progress", {
+                    "status": "scrape_progress",
+                    "ok": scraped_ok,
+                    "total": len(to_scrape)
+                }))
 
-            # ── STAGE 3: Semantic Analysis ──
+            # ── STAGE 3: Semantic Analysis & Synthesis ──
             event_queue.put_nowait(("tree_node", {
                 "nodeId": "semantic_analysis",
                 "stage": "semantic_analysis",
@@ -706,10 +686,26 @@ async def api_search_stream(
             }))
             event_queue.put_nowait(("progress", {"status": "analyzing", "message": "تحليل النصوص دلالياً..."}))
 
-            # Final Aggregation with complete AI Summary report
+            # Aggregation and AI Synthesis
             final_report = await engine.aggregator.aggregate(enriched, q, final_analysis=True, model=model, k_trusted=k_trusted)
             await engine.close()
             engine = None
+
+            # Stream synthesis chunks if direct_answer contains tokens
+            direct_ans = final_report.get("analysis", {}).get("direct_answer", {})
+            ans_text = direct_ans.get("answer", "")
+            if ans_text:
+                # Emit metadata header first
+                sources_map = {f"Source {i+1}": {"title": r.get("title"), "url": r.get("url")} for i, r in enumerate(final_report.get("results", [])[:10])}
+                meta_chunk = f"[[METADATA_START]]{json.dumps({'citations': sources_map})}[[METADATA_END]]\n\n"
+                event_queue.put_nowait(("synthesis_chunk", {"chunk": meta_chunk}))
+
+                # Stream answer in smooth character chunks
+                chunk_size = 50
+                for i in range(0, len(ans_text), chunk_size):
+                    chunk = ans_text[i:i+chunk_size]
+                    event_queue.put_nowait(("synthesis_chunk", {"chunk": chunk}))
+                    await asyncio.sleep(0.01)
 
             event_queue.put_nowait(("node_status_update", {
                 "nodeId": "semantic_analysis",
@@ -721,7 +717,7 @@ async def api_search_stream(
                 },
             }))
 
-            # ── STAGE 4: Verification ──
+            # ── STAGE 4: Fact Verification & Final Report ──
             event_queue.put_nowait(("tree_node", {
                 "nodeId": "verification",
                 "stage": "verification",
@@ -746,12 +742,12 @@ async def api_search_stream(
                 "label": "التقرير جاهز",
             }))
 
-            # ── DONE ──
+            # ── DONE / COMPLETE ──
             event_queue.put_nowait(("complete", final_report))
 
         except Exception:
             print(f"[STREAM ERROR] {traceback.format_exc()}")
-            event_queue.put_nowait(("error", {"message": "حدث خطأ غير متوقع."}))
+            event_queue.put_nowait(("error", {"message": "حدث خطأ غير متوقع في الباك-اند."}))
         finally:
             for t in search_tasks:
                 if not t.done():
@@ -764,7 +760,6 @@ async def api_search_stream(
                     await engine.close()
                 except Exception:
                     pass
-            # Signal done
             event_queue.put_nowait(("__done__", {}))
 
     async def event_generator():

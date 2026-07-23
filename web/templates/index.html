@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="ar" dir="rtl">
+<html lang="ar" dir="rtl" data-theme="dark">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
@@ -51,7 +51,7 @@
     <script src="/static/vis-network.min.js"></script>
     <script src="/static/marked.min.js"></script>
     <script src="/static/purify.min.js"></script>
-    <link rel="stylesheet" href="/static/style.css?v=5">
+    <link rel="stylesheet" href="/static/style.css?v=10">
 </head>
 <body>
 <a href="#searchInput" class="skip-link">تخطي إلى البحث</a>
@@ -91,13 +91,18 @@
             <span class="brand-version">Demo 1 T</span>
         </div>
         <nav class="header-nav" aria-label="التنقل الرئيسي">
+            <a href="/" class="nav-link">المقارنة والمعرفة</a>
             <a href="#about" class="nav-link">حول المحرك</a>
             <a href="#api" class="nav-link">مطورين API</a>
-            <a href="#enterprise" class="nav-link">المؤسسات</a>
         </nav>
-        <div class="header-status" id="headerStatus">
-            <span class="status-dot" id="statusDot"></span>
-            <span id="statusLabel">Ready</span>
+        <div class="header-controls">
+            <button type="button" class="theme-toggle-btn" id="themeToggleBtn" onclick="toggleTheme()" aria-label="تغيير مظهر الصفحة">
+                <i class="fas fa-moon" id="themeIcon"></i>
+            </button>
+            <div class="header-status" id="headerStatus">
+                <span class="status-dot" id="statusDot"></span>
+                <span id="statusLabel">Ready</span>
+            </div>
         </div>
     </div>
 </header>
@@ -132,7 +137,6 @@
                         <i class="fas fa-times" aria-hidden="true"></i>
                     </button>
 
-
                     <!-- Model Dropdown -->
                     <div class="model-dropdown-wrap">
                         <button type="button" class="model-dropdown-trigger" id="modelDropdownTrigger" onclick="toggleModelDropdown()" aria-haspopup="listbox" aria-expanded="false">
@@ -159,7 +163,7 @@
                         <input type="hidden" name="searchModel" id="searchModelInput" value="fathom_s1">
                     </div>
 
-                    <!-- K-Trust toggle: icon-only, before submit -->
+                    <!-- K-Trust toggle -->
                     <div class="kt-wrap">
                         <button
                             type="button"
@@ -167,6 +171,7 @@
                             id="kTrustedToggleBtn"
                             onclick="toggleKTrustedMode()"
                             aria-pressed="false"
+                            aria-label="K-Trust تفعيل وضع التحقق الفائق"
                             title="K-Trust — تفعيل وضع التحقق الفائق (Ctrl+K)"
                         >
                             <span class="kt-dot" id="ktDot"></span>
@@ -174,7 +179,7 @@
                         </button>
                     </div>
 
-                    <button type="submit" class="search-submit-btn-embedded" id="searchSubmitBtn">
+                    <button type="submit" class="search-submit-btn-embedded" id="searchSubmitBtn" aria-label="إرسال طلب البحث">
                         <span>ابحث</span>
                         <i class="fas fa-arrow-left" aria-hidden="true"></i>
                     </button>
@@ -182,8 +187,8 @@
                 </div>
 
                 <div class="search-meta">
-                    <span><i class="fas fa-database" aria-hidden="true"></i> <span id="engineCount">15</span> محركات</span>
-                    <span><i class="fas fa-microchip" aria-hidden="true"></i> AI</span>
+                    <span><i class="fas fa-database" aria-hidden="true"></i> <span id="engineCount">200</span> مصادر</span>
+                    <span><i class="fas fa-microchip" aria-hidden="true"></i> DeepSeek AI</span>
                     <span class="kt-status-hint" id="ktStatusHint">
                         <i class="fas fa-shield-alt"></i>
                         <span id="ktStatusText">K-Trust: إيقاف</span>
@@ -193,8 +198,8 @@
             </form>
 
             <div class="search-tips" id="searchTips">
-                <span class="tip"><i class="fas fa-lightbulb"></i> جرب أسئلة معقدة</span>
-                <span class="tip"><i class="fas fa-globe"></i> جميع المصادر</span>
+                <span class="tip"><i class="fas fa-lightbulb"></i> جرب استعلامات علمية أو تقنية معقدة</span>
+                <span class="tip"><i class="fas fa-globe"></i> تتبع شبكي حي لجميع المصادر</span>
             </div>
         </div>
     </section>
@@ -203,23 +208,20 @@
     <section class="results-section" id="resultsSection" style="display:none">
         <div class="results-topbar">
             <div class="results-meta">
-                <!-- During search, this is visible -->
                 <span id="searchActiveStatus" class="search-active-status">
                     <i class="fas fa-circle-notch fa-spin"></i> جاري التنقيب والتحليل الدلالي... 
                     <span id="liveSearchTimer" class="timer-badge">0.0</span>ث
                 </span>
-                <!-- After search, this becomes visible -->
                 <span id="searchResultsCountContainer" class="results-count" style="display:none">
                     تم العثور على <span id="resultsCount">صفر</span> مصدر في <span id="searchTime">0.0</span>ث
                 </span>
-                <button class="new-search-btn" id="newSearchBtn" onclick="resetSearch()">
+                <button class="new-search-btn" id="newSearchBtn" onclick="resetSearch()" aria-label="بدء بحث جديد">
                     <i class="fas fa-redo-alt"></i> بحث جديد
                 </button>
             </div>
             <div class="results-actions">
-                <!-- Combined Export Dropdown -->
                 <div class="export-dropdown-wrap" id="exportDropdownWrap">
-                    <button type="button" class="export-main-btn" onclick="toggleExportMenu(event)" id="exportDropdownBtn" title="تصدير النتائج والتقرير">
+                    <button type="button" class="export-main-btn" onclick="toggleExportMenu(event)" id="exportDropdownBtn" title="تصدير النتائج والتقرير" aria-label="قائمة التصدير">
                         <i class="fas fa-download"></i>
                         <span>تصدير النتائج</span>
                         <i class="fas fa-chevron-down chevron-icon"></i>
@@ -242,7 +244,7 @@
                             </span>
                         </button>
                         <button class="topo-option" onclick="exportAsHTMLReport(); closeExportMenu()">
-                            <i class="fas fa-file-html"></i>
+                            <i class="fas fa-file-contract"></i>
                             <span>
                                 <strong>حفظ التقرير بصيغة HTML</strong>
                                 <small>صفحة ويب تفاعلية مدمجة للتقرير</small>
@@ -276,7 +278,46 @@
                     </div>
                 </div>
             </div>
+        </div>
 
+        <!-- REAL PERFORMANCE METRICS BAR -->
+        <div class="metrics-bar" id="metricsBar">
+            <div class="metric-card">
+                <div class="metric-icon"><i class="fas fa-clock"></i></div>
+                <div class="metric-info">
+                    <span class="metric-val" id="metricTTFT">—</span>
+                    <span class="metric-label">زمن أول رمز (TTFT)</span>
+                </div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-icon"><i class="fas fa-tachometer-alt"></i></div>
+                <div class="metric-info">
+                    <span class="metric-val" id="metricTPS">—</span>
+                    <span class="metric-label">سرعة التوليد (TPS)</span>
+                </div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-icon"><i class="fas fa-database"></i></div>
+                <div class="metric-info">
+                    <span class="metric-val" id="metricSourceCount">—</span>
+                    <span class="metric-label">المصادر الفعلية</span>
+                </div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-icon"><i class="fas fa-shield-alt"></i></div>
+                <div class="metric-info">
+                    <span class="metric-val" id="metricTrustDist">—</span>
+                    <span class="metric-label">متوسط ثقة النطاقات</span>
+                </div>
+            </div>
+            <div class="metric-card grounding-card">
+                <div class="metric-icon"><i class="fas fa-check-double"></i></div>
+                <div class="metric-info">
+                    <span class="metric-val" id="groundingScoreVal">—</span>
+                    <span class="metric-label">مؤشر التوثيق (Grounding)</span>
+                </div>
+                <span class="grounding-badge" id="groundingScoreBadge">Unverified</span>
+            </div>
         </div>
 
         <!-- AI DIRECT ANSWER CAPSULE -->
@@ -291,16 +332,15 @@
                 </div>
                 <div class="ai-header-actions">
                     <span class="ai-badge" id="aiModelBadge">RootSearch AI</span>
-                    <button class="ai-toggle-btn" id="aiToggleBtn" onclick="toggleAiCapsule()" title="طي/توسيع">
+                    <button class="ai-toggle-btn" id="aiToggleBtn" onclick="toggleAiCapsule()" title="طي/توسيع" aria-label="طي الإجابة">
                         <i class="fas fa-chevron-up"></i>
                     </button>
                 </div>
             </div>
-            <div class="ai-overview-body" id="aiOverviewBody">
-                <!-- Content injected by JS -->
+            <div class="ai-overview-body" id="aiOverviewBody" aria-live="polite">
+                <!-- Content injected dynamically by script.js -->
             </div>
         </div>
-
 
         <!-- TABS -->
         <nav class="results-tabs" role="tablist" aria-label="عرض النتائج">
@@ -314,13 +354,12 @@
                 <i class="fas fa-brain" aria-hidden="true"></i><span>التحليل</span>
             </button>
             <button class="tab-btn" id="tab_sources" role="tab" aria-selected="false" onclick="switchTab('sources')">
-                <i class="fas fa-database" aria-hidden="true"></i><span>المصادر</span>
+                <i class="fas fa-database" aria-hidden="true"></i><span>المصادر المعرفية</span>
             </button>
             <button class="tab-btn" id="tab_results" role="tab" aria-selected="false" onclick="switchTab('results')" style="display:none">
                 <i class="fas fa-list-ul" aria-hidden="true"></i><span>النتائج</span>
             </button>
         </nav>
-
 
         <!-- ─── LIVE SEARCH TREE ─────────────────────────── -->
         <div id="searchTreeContainer" class="tab-content" role="tabpanel" aria-labelledby="tab_tree">
@@ -335,11 +374,10 @@
                 <p class="tree-status-line" id="treeStatus">في انتظار بدء الاستعلام...</p>
             </div>
 
-            <!-- Cursor UI Layout Wrapper -->
+            <!-- Agent Layout Wrapper -->
             <div class="agent-layout-wrap" id="agentLayoutWrap">
                 <!-- Left Panel: Vertical Steps Timeline -->
                 <div class="agent-stream-panel">
-                    <!-- Stage 0: Trigger -->
                     <div class="agent-stage-block" id="stage_block_trigger" data-stage="trigger" data-status="pending">
                         <div class="agent-stage-header" onclick="toggleStageBlock('trigger')">
                             <span class="stage-status-icon"><i class="fas fa-play"></i></span>
@@ -351,7 +389,6 @@
                         </div>
                     </div>
 
-                    <!-- Stage 1: Source Discovery -->
                     <div class="agent-stage-block" id="stage_block_source_discovery" data-stage="source_discovery" data-status="pending">
                         <div class="agent-stage-header" onclick="toggleStageBlock('source_discovery')">
                             <span class="stage-status-icon"><i class="fas fa-search"></i></span>
@@ -363,7 +400,6 @@
                         </div>
                     </div>
 
-                    <!-- Stage 2: Extraction -->
                     <div class="agent-stage-block" id="stage_block_extraction" data-stage="extraction" data-status="pending">
                         <div class="agent-stage-header" onclick="toggleStageBlock('extraction')">
                             <span class="stage-status-icon"><i class="fas fa-spider"></i></span>
@@ -375,7 +411,6 @@
                         </div>
                     </div>
 
-                    <!-- Stage 3: Semantic Analysis -->
                     <div class="agent-stage-block" id="stage_block_semantic_analysis" data-stage="semantic_analysis" data-status="pending">
                         <div class="agent-stage-header" onclick="toggleStageBlock('semantic_analysis')">
                             <span class="stage-status-icon"><i class="fas fa-brain"></i></span>
@@ -387,7 +422,6 @@
                         </div>
                     </div>
 
-                    <!-- Stage 4: Verification -->
                     <div class="agent-stage-block" id="stage_block_verification" data-stage="verification" data-status="pending">
                         <div class="agent-stage-header" onclick="toggleStageBlock('verification')">
                             <span class="stage-status-icon"><i class="fas fa-shield-alt"></i></span>
@@ -413,7 +447,6 @@
             </div>
         </div>
 
-
         <!-- ─── SOURCES GRAPH ──────────────────────────── -->
         <div id="knowledgeGraphContainer" class="tab-content is-hidden" role="tabpanel" aria-labelledby="tab_graph">
             <div class="graph-header">
@@ -422,21 +455,21 @@
                     <p>تتبع مباشر وتفاعلي لمسار البحث واستخراج الكلمات المفتاحية دلالياً</p>
                 </div>
                 <div class="graph-btns">
-                    <button class="ghost-btn" onclick="resetGraphView()">
+                    <button class="ghost-btn" onclick="resetGraphView()" aria-label="توسيع وعرض الشبكة كاملة">
                         <i class="fas fa-expand"></i> توسيط
                     </button>
                 </div>
             </div>
             <div class="graph-layout" style="display: block;">
-                <div class="live-tree-canvas-container" id="liveTreeCanvasContainer" style="position: relative; width: 100%; height: 600px; background: rgba(0, 0, 0, 0.6); border: 1px solid var(--border); border-radius: var(--r-lg); overflow: hidden;">
+                <div class="live-tree-canvas-container" id="liveTreeCanvasContainer">
                     <div id="liveTreeCanvas" style="width: 100%; height: 100%;"></div>
-                    <div class="graph-legend-overlay" style="position: absolute; bottom: 12px; right: 12px; display: flex; gap: var(--sp-3); background: rgba(10, 10, 10, 0.95); padding: var(--sp-2) var(--sp-3); border-radius: var(--r-md); border: 1px solid var(--border); font-size: 11px; color: var(--text-muted); backdrop-filter: blur(8px); z-index: 10; flex-wrap: wrap;">
-                        <span style="display:flex;align-items:center;gap:6px;"><span style="width:8px;height:8px;border-radius:50%;background:#8B5CF6;display:inline-block;"></span>الاستعلام الرئيسي</span>
-                        <span style="display:flex;align-items:center;gap:6px;"><span style="width:8px;height:8px;border-radius:50%;background:#3B82F6;display:inline-block;"></span>استعلام فرعي</span>
-                        <span style="display:flex;align-items:center;gap:6px;"><span style="width:8px;height:8px;border-radius:50%;background:#6366F1;display:inline-block;"></span>محركات البحث</span>
-                        <span style="display:flex;align-items:center;gap:6px;"><span style="width:8px;height:8px;border-radius:50%;background:#FBBF24;display:inline-block;"></span>تحت المعالجة</span>
-                        <span style="display:flex;align-items:center;gap:6px;"><span style="width:8px;height:8px;border-radius:50%;background:#10B981;display:inline-block;"></span>مستخرج بنجاح</span>
-                        <span style="display:flex;align-items:center;gap:6px;"><span style="width:8px;height:8px;border-radius:50%;background:#EF4444;display:inline-block;"></span>فشل الاستخراج</span>
+                    <div class="graph-legend-overlay">
+                        <span class="legend-item"><span class="legend-color-dot" style="background:#8B5CF6;"></span>الاستعلام الرئيسي</span>
+                        <span class="legend-item"><span class="legend-color-dot" style="background:#3B82F6;"></span>استعلام فرعي</span>
+                        <span class="legend-item"><span class="legend-color-dot" style="background:#6366F1;"></span>محركات البحث</span>
+                        <span class="legend-item"><span class="legend-color-dot" style="background:#FBBF24;"></span>تحت المعالجة</span>
+                        <span class="legend-item"><span class="legend-color-dot" style="background:#10B981;"></span>مستخرج بنجاح</span>
+                        <span class="legend-item"><span class="legend-color-dot" style="background:#EF4444;"></span>فشل الاستخراج</span>
                     </div>
                 </div>
             </div>
@@ -466,7 +499,6 @@
 
         <!-- ─── SOURCES PAGE ──────────────────────────────── -->
         <div id="sourcesPanel" class="tab-content is-hidden" role="tabpanel" aria-labelledby="tab_sources">
-            <!-- Sources Header -->
             <div class="sources-page-header">
                 <div class="sph-title-row">
                     <div class="sph-left">
@@ -497,13 +529,12 @@
                         </div>
                     </div>
                 </div>
-                <!-- Filter & Sort bar -->
                 <div class="sources-filter-bar" id="sourcesFilterBar">
                     <div class="sfb-search-wrap">
                         <i class="fas fa-search sfb-search-icon"></i>
-                        <input type="text" id="sourcesSearchInput" class="sfb-search" placeholder="ابحث في المصادر..." oninput="filterSourcesList(this.value)" />
+                        <input type="text" id="sourcesSearchInput" class="sfb-search" placeholder="ابحث في المصادر..." oninput="filterSourcesList(this.value)" aria-label="تصفية المصادر" />
                     </div>
-                    <select class="sfb-sort" id="sourcesSortSelect" onchange="sortSourcesList(this.value)">
+                    <select class="sfb-sort" id="sourcesSortSelect" onchange="sortSourcesList(this.value)" aria-label="ترتيب المصادر">
                         <option value="relevance">ترتيب: الصلة</option>
                         <option value="credibility">ترتيب: المصداقية</option>
                         <option value="words">ترتيب: حجم المحتوى</option>
@@ -511,7 +542,6 @@
                     </select>
                 </div>
             </div>
-            <!-- Sources list -->
             <div class="sources-full-list" id="sourcesFullList">
                 <div class="loading-state">
                     <div class="loader-rings"><div></div><div></div><div></div></div>
@@ -520,7 +550,6 @@
             </div>
         </div>
 
-        <!-- ─── RESULTS LIST (hidden, internal use) ─────── -->
         <div id="resultsListWrapper" class="tab-content is-hidden" role="tabpanel" aria-labelledby="tab_results">
             <div class="mobile-filter-bar">
                 <button type="button" class="mobile-filter-trigger" id="mobileFilterTriggerBtn" onclick="openFilterSheet()">
@@ -542,12 +571,11 @@
 
 </main>
 
-<!-- Footer -->
 <footer class="site-footer">
     <p>RootSearch — Deep Intelligence Search Engine</p>
 </footer>
 
-<!-- Keyword Modal -->
+<!-- Modals -->
 <div id="keywordModal" class="modal-overlay" style="display:none" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
     <div class="modal-box">
         <div class="modal-header">
@@ -577,22 +605,17 @@
         </div>
         <div class="modal-footer">
             <button class="btn btn-secondary" onclick="closeKeywordModal()">إغلاق</button>
-            <button class="btn btn-primary" id="modalScrollBtn"><i class="fas fa-chevron-down"></i> أول نتيجة</button>
-            <button class="btn btn-accent" id="modalFilterBtn"><i class="fas fa-filter"></i> تصفية</button>
         </div>
     </div>
 </div>
 
-<!-- Source Detail Modal -->
 <div id="sourceDetailModal" class="modal-overlay" style="display:none" role="dialog" aria-modal="true" aria-labelledby="sourceModalTitle">
     <div class="modal-box source-detail-box">
         <div class="modal-header">
             <h3 id="sourceModalTitle"><i class="fas fa-file-alt"></i> تفاصيل المصدر المعرفي</h3>
             <button class="modal-close" onclick="closeSourceDetailModal()" aria-label="إغلاق">&times;</button>
         </div>
-        <div class="modal-body" id="sourceDetailModalBody">
-            <!-- Content injected by JS -->
-        </div>
+        <div class="modal-body" id="sourceDetailModalBody"></div>
         <div class="modal-footer">
             <button class="btn btn-secondary" onclick="closeSourceDetailModal()">إغلاق</button>
             <a id="sourceModalOpenLink" href="#" target="_blank" rel="noopener noreferrer" class="btn btn-primary"><i class="fas fa-external-link-alt"></i> زيارة الموقع الأصلي</a>
@@ -600,18 +623,7 @@
     </div>
 </div>
 
-<!-- Category Filter Bottom Sheet (Mobile) -->
-<div class="node-sheet" id="filterSheet" aria-hidden="true">
-    <div class="sheet-handle"></div>
-    <h3 style="font-size:16px;margin-bottom:12px;text-align:center;"><i class="fas fa-filter"></i> اختر فئة النتائج</h3>
-    <div class="sheet-content" id="filterSheetContent">
-        <!-- Category items will be injected here dynamically -->
-    </div>
-    <button class="sheet-close" onclick="closeFilterSheet()">إغلاق</button>
-</div>
-<div class="sheet-backdrop" id="filterSheetBackdrop" onclick="closeFilterSheet()"></div>
-
 <script src="/static/config.js"></script>
-<script src="/static/script.js?v=8"></script>
+<script src="/static/script.js?v=10"></script>
 </body>
 </html>

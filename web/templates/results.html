@@ -1,27 +1,40 @@
 <!DOCTYPE html>
-<html lang="ar" dir="rtl">
+<html lang="ar" dir="rtl" data-theme="dark">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{{ title }}</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>{{ title }} — RootSearch</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>⬡</text></svg>">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@300;400;600;700;900&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
-    <link rel="stylesheet" href="/static/style.css">
-    <!-- Vis.js CDN for Interactive Network Graph -->
+    <link rel="stylesheet" href="/static/style.css?v=10">
     <script type="text/javascript" src="/static/vis-network.min.js"></script>
-    <!-- Marked.js for AI Summary Markdown Rendering -->
     <script src="/static/marked.min.js"></script>
-    <!-- DOMPurify for XSS Prevention -->
     <script src="/static/purify.min.js"></script>
 </head>
 <body>
-    <div class="stars"></div>
-    
     <div class="container">
-        <div class="search-section compact">
+        <header class="site-header">
+            <div class="header-inner">
+                <a href="/" class="brand" style="text-decoration:none;">
+                    <span class="brand-icon">⬡</span>
+                    <span class="brand-name">RootSearch</span>
+                </a>
+                <nav class="header-nav" aria-label="التنقل">
+                    <a href="/search" class="nav-link">البحث المباشر</a>
+                    <a href="/compare" class="nav-link">مصفوفة القدرات</a>
+                </nav>
+                <div class="header-controls">
+                    <button type="button" class="theme-toggle-btn" onclick="toggleTheme()" aria-label="تغيير المظهر">
+                        <i class="fas fa-moon"></i>
+                    </button>
+                </div>
+            </div>
+        </header>
+
+        <div class="search-section compact" style="margin-top:20px;">
             <form id="searchForm" class="search-box" onsubmit="return handleSearch(event)">
                 <div class="search-input-wrapper">
                     <i class="fas fa-search search-icon"></i>
@@ -32,21 +45,13 @@
                         value="{{ query }}"
                         autocomplete="off"
                         autofocus
+                        aria-label="استعلام البحث"
                     />
-                    <button type="button" class="clear-btn" id="clearBtn" onclick="clearSearch()">
+                    <button type="button" class="clear-btn" id="clearBtn" onclick="clearSearch()" aria-label="مسح">
                         <i class="fas fa-times"></i>
                     </button>
                     <button type="submit" class="search-submit-btn" id="searchSubmitBtn">
                         <i class="fas fa-arrow-left"></i> ابحث
-                    </button>
-                </div>
-                <div class="search-options">
-                    <label class="option-label">
-                        <input type="checkbox" id="deepSearch" {% if deep %}checked{% endif %} />
-                        <span class="option-toggle"><i class="fas fa-brain"></i> بحث عميق</span>
-                    </label>
-                    <button type="button" class="new-search-btn" id="newSearchBtn" onclick="resetSearch()" style="display: none;">
-                        <i class="fas fa-redo-alt"></i> بحث جديد
                     </button>
                 </div>
             </form>
@@ -55,65 +60,58 @@
         <div id="resultsSection" class="results-section">
             <div class="results-header">
                 <div class="results-info">
-                    <!-- During search, this is visible -->
                     <span id="searchActiveStatus" class="search-active-status">
                         <i class="fas fa-circle-notch fa-spin"></i> جاري التنقيب والتحليل الدلالي... 
                         <span id="liveSearchTimer" class="timer-badge">0.0</span>ث
                     </span>
-                    <!-- After search, this becomes visible -->
                     <span id="searchResultsCountContainer" class="results-count" style="display:none">
                         تم العثور على <span id="resultsCount">0</span> مصدر في <span id="searchTime">0.0</span>ث
                     </span>
                 </div>
                 <div class="results-actions">
-                    <button class="action-btn save-network-btn" onclick="exportAsHTMLReport()" title="حفظ شبكة المصادر التفاعلية (HTML) لفتحها لاحقاً">
-                        <i class="fas fa-network-wired"></i> حفظ الشبكة التفاعلية
+                    <button class="action-btn save-network-btn" onclick="exportAsHTMLReport()" title="حفظ شبكة المصادر التفاعلية (HTML)">
+                        <i class="fas fa-network-wired"></i> حفظ التقرير
                     </button>
                     <button class="action-btn" onclick="exportAsJSON()" title="تصدير JSON"><i class="fas fa-file-code"></i></button>
                     <button class="action-btn" onclick="exportAsText()" title="تصدير نص"><i class="fas fa-file-alt"></i></button>
                 </div>
             </div>
 
-            <!-- تبويبات عصرية لعرض النتائج بمستويات مختلفة -->
-            <div class="results-tabs">
-                <button class="tab-btn active" id="tab_tree" onclick="switchTab('tree')">
+            <!-- TABS -->
+            <div class="results-tabs" role="tablist">
+                <button class="tab-btn active" id="tab_tree" role="tab" aria-selected="true" onclick="switchTab('tree')">
                     <i class="fas fa-stream"></i> مسار جلب المصادر حياً
                 </button>
-                <button class="tab-btn" id="tab_graph" onclick="switchTab('graph')">
+                <button class="tab-btn" id="tab_graph" role="tab" aria-selected="false" onclick="switchTab('graph')">
                     <i class="fas fa-project-diagram"></i> الشبكة المصدرية الخارقة
                 </button>
-                <button class="tab-btn" id="tab_analysis" onclick="switchTab('analysis')">
+                <button class="tab-btn" id="tab_analysis" role="tab" aria-selected="false" onclick="switchTab('analysis')">
                     <i class="fas fa-brain"></i> التلخيص والتحليلات
                 </button>
-                <button class="tab-btn" id="tab_results" onclick="switchTab('results')">
-                    <i class="fas fa-list-ul"></i> قائمة النتائج بالتفصيل
+                <button class="tab-btn" id="tab_sources" role="tab" aria-selected="false" onclick="switchTab('sources')">
+                    <i class="fas fa-database"></i> قائمة النتائج بالتفصيل
                 </button>
             </div>
 
-            <!-- شجرة البحث التفاعلية الحية -->
+            <!-- LIVE SEARCH TREE -->
             <div id="searchTreeContainer" class="search-tree-container tab-content">
                 <div class="tree-header">
                     <h3><i class="fas fa-network-wired"></i> مسار جلب وتحليل مصادر البيانات (شجرة البحث الحية)</h3>
                     <p class="tree-status" id="treeStatus">في انتظار بدء الاستعلام...</p>
                 </div>
                 <div class="tree-wrapper">
-                    <div id="searchTree" class="search-tree-modern">
-                        <!-- سيتم رسم الشجرة هنا ديناميكياً بهيكل CSS Grid/Flex متفرع احترافي -->
-                    </div>
+                    <div id="searchTree" class="search-tree-modern"></div>
                 </div>
             </div>
 
-            <!-- شبكة المصادر التفاعلية الخارقة -->
+            <!-- KNOWLEDGE GRAPH -->
             <div id="knowledgeGraphContainer" class="graph-section-wrapper tab-content" style="display: none;">
                 <div class="graph-header-controls">
                     <div class="graph-title-desc">
                         <h3><i class="fas fa-project-diagram"></i> شبكة العلاقات المعرفية والمصادر</h3>
-                        <p>خريطة ذهنية تفاعلية بالفيزياء تربط بين موضوع البحث، والمواقع، والكلمات المفتاحية المستخرجة بالذكاء الاصطناعي</p>
+                        <p>خريطة ذهنية تفاعلية بالفيزياء تربط بين موضوع البحث، والمواقع، والكلمات المفتاحية</p>
                     </div>
                     <div class="graph-control-buttons">
-                        <button class="graph-ctrl-btn" onclick="toggleGraphPhysics()" id="physicsBtn" title="تجميد/تشغيل محاكاة الفيزياء">
-                            <i class="fas fa-pause"></i> تجميد الشبكة
-                        </button>
                         <button class="graph-ctrl-btn" onclick="resetGraphView()" title="توسيط وعرض كل العقد">
                             <i class="fas fa-expand"></i> توسيط
                         </button>
@@ -123,70 +121,40 @@
                     <div class="graph-canvas-container">
                         <div id="knowledgeGraphCanvas"></div>
                     </div>
-                    <div class="graph-sidebar" id="graphSidebar">
-                        <div class="sidebar-default-msg">
-                            <i class="fas fa-mouse-pointer"></i>
-                            <h4>استكشف الشبكة المصدرية</h4>
-                            <p>انقر على أي عقدة (الموقع، الكلمة المفتاحية، أو الاستعلام) لعرض التحليل التفصيلي والروابط المعرفية هنا</p>
-                        </div>
-                        <div class="sidebar-details-content" style="display: none;">
-                            <!-- سيتم تعبئته ديناميكياً عن طريق JS -->
-                        </div>
-                    </div>
                 </div>
             </div>
 
-            <!-- لوحة التلخيص والتحليلات -->
+            <!-- ANALYSIS PANEL -->
             <div class="analysis-panel tab-content" id="analysisPanel" style="display: none;">
                 <div class="analysis-grid">
                     <div class="analysis-card" id="summaryCard">
                         <div class="card-header"><i class="fas fa-file-alt"></i><h3>التلخيص الشامل</h3></div>
-                        <div class="card-body" id="summaryContent"><div class="loading-dots"><span></span><span></span><span></span></div></div>
+                        <div class="card-body" id="summaryContent"><div class="skeleton-loader"></div></div>
                     </div>
                     <div class="analysis-card" id="keywordsCard">
-                        <div class="card-header"><i class="fas fa-tags"></i><h3>الكلمات المفتاحية الأكثر صلة</h3></div>
+                        <div class="card-header"><i class="fas fa-tags"></i><h3>الكلمات المفتاحية</h3></div>
                         <div class="card-body" id="keywordsContent"></div>
-                    </div>
-                    <div class="analysis-card" id="sentimentCard">
-                        <div class="card-header"><i class="fas fa-heart"></i><h3>تحليل المشاعر العام</h3></div>
-                        <div class="card-body" id="sentimentContent"></div>
-                    </div>
-                    <div class="analysis-card" id="statsCard">
-                        <div class="card-header"><i class="fas fa-chart-bar"></i><h3>الإحصائيات والتحليلات</h3></div>
-                        <div class="card-body" id="statsContent"></div>
                     </div>
                 </div>
             </div>
 
-            <!-- قائمة النتائج بالتفصيل -->
-            <div id="resultsListWrapper" class="tab-content" style="display: none;">
-                <div class="categories-nav" id="categoriesNav"></div>
-                <div class="results-list" id="resultsList">
-                    <div class="loading-state" id="loadingState">
-                        <div class="loader"><div class="loader-circle"></div><div class="loader-circle"></div><div class="loader-circle"></div></div>
-                        <p>جاري البحث في أعماق الإنترنت...</p>
-                        <div class="search-progress">
-                            <div class="progress-item"><i class="fas fa-search"></i> البحث في المحركات...</div>
-                            <div class="progress-item"><i class="fas fa-spider"></i> تسليق المواقع...</div>
-                            <div class="progress-item"><i class="fas fa-brain"></i> تحليل النتائج...</div>
-                        </div>
-                    </div>
-                </div>
-                <div class="pagination" id="pagination"></div>
+            <!-- SOURCES PANEL -->
+            <div id="sourcesPanel" class="tab-content" style="display: none;">
+                <div class="sources-full-list" id="sourcesFullList"></div>
             </div>
         </div>
     </div>
 
-    <footer class="footer">
-        <p>DeepSearch Engine v1.0 - البحث الذكي المتطور في أعماق الإنترنت</p>
+    <footer class="footer" style="margin-top:40px;text-align:center;">
+        <p>RootSearch Engine v3.0 - البحث الذكي المتطور في أعماق الإنترنت</p>
     </footer>
 
-    <script src="/static/script.js"></script>
+    <script src="/static/config.js"></script>
+    <script src="/static/script.js?v=10"></script>
     <script>
-        // تشغيل البحث تلقائياً عند تحميل الصفحة مع دعم الذاكرة المؤقتة (Cache)
         document.addEventListener('DOMContentLoaded', function() {
             if ('{{ query }}') {
-                setTimeout(() => handleSearch(null, true), 500);
+                setTimeout(() => handleSearch(null), 300);
             }
         });
     </script>
