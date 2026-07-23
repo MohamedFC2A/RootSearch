@@ -13,14 +13,14 @@
 ██║░░░░░██║░░░░░╚█████╔╝██║░░██║╚█████╔╝██║░░██║
 ╚═╝░░░░░╚═╝░░░░░░╚════╝░╚═╝░░╚═╝░╚════╝░╚═╝░░╚═╝
 
-RootSearch - Deep Search Engine
-محرك البحث الخارق: يبحث في أعماق الإنترنت ويحلل كل شيء
+RootSearch - Deep Search Engine & Next-Gen Meta-Search AI Pipeline
 """
 
 import asyncio
 import sys
 import os
-from typing import Optional
+import logging
+from typing import Optional, AsyncGenerator, List, Dict, Any
 
 # إضافة المسار الحالي
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -28,7 +28,93 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from config import config
 from core.search_engine import SearchEngine
 from core.scraper import DeepScraper
-from core.aggregator import ResultAggregator
+from core.aggregator import ResultAggregator, SourceTrustEvaluator
+from core.sources.searxng import SearXNGClient
+from core.sources.ddg import DuckDuckGoClient
+from core.sources.academic import HeterogeneousDataExtractor
+from core.fetching.engine import ResilientFetchEngine
+from core.rag.chunker import SemanticChunker, ContextOrderingEngine
+from core.rag.vector_store import InMemoryVectorStore
+from core.rag.reranker import SemanticReranker
+from core.cognitive.prompt_manager import PromptManager
+from core.cognitive.LLM_client import MockLLMClient
+from core.cognitive.synthesizer import GroundedAISynthesizer
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("RootSearch.Pipeline")
+
+class RootSearchPipeline:
+    """Enterprise Next-Gen Async Streaming Pipeline."""
+
+    def __init__(self):
+        self.searxng_client = SearXNGClient(instance_urls=["https://searx.be", "https://searx.space"])
+        self.ddg_client = DuckDuckGoClient()
+        self.evaluator = SourceTrustEvaluator()
+        self.fetch_engine = ResilientFetchEngine(max_concurrency=8, timeout=8.0)
+        self.chunker = SemanticChunker(target_chunk_size=300, overlap=40)
+        self.vector_store = InMemoryVectorStore()
+        self.reranker = SemanticReranker()
+        self.prompt_manager = PromptManager()
+        self.synthesizer = GroundedAISynthesizer(self.prompt_manager)
+        self.llm_client = MockLLMClient()
+
+    async def execute_search_stream(self, query: str) -> AsyncGenerator[str, None]:
+        logger.info(f"Initiating pipeline for query: '{query}'")
+
+        # Step 1: Multi-Engine Concurrent Gathering
+        searxng_task = asyncio.create_task(self.searxng_client.search(query))
+        ddg_task = asyncio.create_task(self.ddg_client.search(query))
+        arxiv_task = asyncio.create_task(HeterogeneousDataExtractor.fetch_arxiv_papers(query))
+
+        s_results, d_results, a_results = await asyncio.gather(
+            searxng_task, ddg_task, arxiv_task, return_exceptions=True
+        )
+
+        raw_results = []
+        if isinstance(s_results, list):
+            for r in s_results:
+                if hasattr(r, "dict"):
+                    raw_results.append(r.dict())
+                elif hasattr(r, "model_dump"):
+                    raw_results.append(r.model_dump())
+                elif isinstance(r, dict):
+                    raw_results.append(r)
+        if isinstance(d_results, list):
+            raw_results.extend(d_results)
+        if isinstance(a_results, list):
+            raw_results.extend(a_results)
+
+        # Step 2: Authority & Domain Quality Filtering
+        filtered_sources = self.evaluator.filter_and_rank(raw_results)[:8]
+
+        # Step 3: Resilient Parallel Content Fetching & Boilerplate Removal
+        fetched_docs = await self.fetch_engine.fetch_all(filtered_sources)
+
+        # Step 4: Semantic Chunking
+        all_chunks = []
+        for doc in fetched_docs:
+            chunks = self.chunker.chunk_document(doc)
+            all_chunks.extend(chunks)
+
+        if not all_chunks:
+            yield "No high-quality sources could be fetched to answer your query."
+            return
+
+        # Step 5: In-Memory Embedding & Similarity Search
+        self.vector_store.build_index(all_chunks)
+        top_similar_chunks = [item[0] for item in self.vector_store.similarity_search(query, top_k=12)]
+
+        # Step 6: Cross-Encoder Semantic Reranking
+        reranked_chunks = self.reranker.rerank(query, top_similar_chunks, top_n=5)
+
+        # Step 7: U-Shape Context Ordering ("Lost in the Middle" Mitigation)
+        final_ordered_chunks = ContextOrderingEngine.apply_u_shaped_ordering(reranked_chunks)
+
+        # Step 8: Decoupled Async Grounded Streaming AI Synthesis
+        async for chunk in self.synthesizer.generate_synthesis_stream(
+            query, final_ordered_chunks, self.llm_client
+        ):
+            yield chunk
 
 
 class RootSearch:
@@ -38,19 +124,11 @@ class RootSearch:
         self.search_engine = SearchEngine(on_event=on_event)
         self.scraper = DeepScraper(on_event=on_event)
         self.aggregator = ResultAggregator(on_event=on_event)
+        self.pipeline = RootSearchPipeline()
     
     async def deep_search(self, query: str, model: str = "fathom_s1", deep_analysis: bool = True, k_trusted: bool = False) -> dict:
         """
         البحث العميق الخارق
-        
-        Args:
-            query: استعلام البحث
-            model: fathom_s1 أو fathom_max
-            deep_analysis: هل نقوم بتحليل عميق أم بحث سريع
-            k_trusted: وضع التحقق الفائق
-        
-        Returns:
-            تقرير شامل بنتائج البحث
         """
         print(f"\n[*] RootSearch: بدء البحث العميق...")
         print(f"[*] الاستعلام: {query}")
@@ -86,7 +164,7 @@ class RootSearch:
                     query=query,
                     max_nodes=config.fathom_max_nodes,
                     max_depth=config.fathom_max_depth,
-                    concurrency=max(config.fathom_max_concurrency, 150),
+                    concurrency=config.fathom_max_concurrency,
                     aggregator=self.aggregator,
                     k_trusted=k_trusted
                 )
@@ -115,8 +193,6 @@ class RootSearch:
         await self.search_engine.close()
         await self.scraper.close()
 
-
-# ===== واجهة سطر الأوامر (CLI) =====
 
 def main():
     """نقطة الدخول الرئيسية - تفوض العمل لـ cli.terminal"""

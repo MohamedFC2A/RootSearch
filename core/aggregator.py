@@ -578,3 +578,69 @@ class ResultAggregator:
             'summary': result.metadata.get('summary', ''),
             'metadata': result.metadata,
         }
+
+
+import urllib.parse
+import json
+import os
+
+class SourceTrustEvaluator:
+    def __init__(self, config_path: str = "config/domains_trust.json"):
+        self.high_authority_tlds = {".edu", ".gov", ".org", ".ac.uk"}
+        self.trusted_domains = {"wikipedia.org", "github.com", "arxiv.org", "nature.com", "stackoverflow.com", "reuters.com", "bbc.com"}
+        self.blacklisted_domains = {"content-farm.xyz", "seo-spam-hub.com"}
+
+        if os.path.exists(config_path):
+            try:
+                with open(config_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    if "high_authority_tlds" in data:
+                        self.high_authority_tlds.update(data["high_authority_tlds"])
+                    if "trusted_domains" in data:
+                        self.trusted_domains.update(data["trusted_domains"])
+                    if "blacklisted_domains" in data:
+                        self.blacklisted_domains.update(data["blacklisted_domains"])
+            except Exception:
+                pass
+
+    def calculate_authority_score(self, url: str) -> float:
+        parsed = urllib.parse.urlparse(url)
+        domain = parsed.netloc.lower()
+
+        if any(domain.endswith(b) for b in self.blacklisted_domains):
+            return 0.0
+
+        score = 0.5 # Neutral baseline
+
+        if any(domain.endswith(tld) for tld in self.high_authority_tlds):
+            score += 0.3
+        
+        if any(td in domain for td in self.trusted_domains):
+            score += 0.4
+
+        # Penalize excessive subdomains or query params indicative of spam
+        if domain.count(".") > 3:
+            score -= 0.15
+
+        return min(max(score, 0.0), 1.0)
+
+    def filter_and_rank(self, raw_results: List[Dict[str, Any]], threshold: float = 0.3) -> List[Dict[str, Any]]:
+        ranked = []
+        seen_urls = set()
+
+        for res in raw_results:
+            url = res.get("url", "")
+            if url in seen_urls:
+                continue
+            seen_urls.add(url)
+
+            auth_score = self.calculate_authority_score(url)
+            if auth_score < threshold:
+                continue
+
+            res["authority_score"] = auth_score
+            ranked.append(res)
+
+        # Sort descending by calculated domain authority score
+        return sorted(ranked, key=lambda x: x["authority_score"], reverse=True)
+

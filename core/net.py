@@ -11,9 +11,16 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import socket
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
+import aiohttp
 import aiohttp.abc
+from config import config
+
+
+class SSRFValidationError(OSError):
+    """Raised when a resolved IP address violates SSRF security boundaries."""
+    pass
 
 
 class SafeResolver(aiohttp.abc.AbstractResolver):
@@ -41,7 +48,7 @@ class SafeResolver(aiohttp.abc.AbstractResolver):
                 continue
 
         if not safe:
-            raise OSError(
+            raise SSRFValidationError(
                 f"Access denied: Private or invalid IP addresses are blocked for {host}"
             )
 
@@ -58,16 +65,27 @@ class SafeResolver(aiohttp.abc.AbstractResolver):
         pass
 
 
-import aiohttp
-from config import config
-
+_MAX_DOMAIN_SESSIONS = 500
 _GLOBAL_SESSIONS: Dict[str, aiohttp.ClientSession] = {}
 _GLOBAL_SESSIONS_LOCK = asyncio.Lock()
+
+_SEARCH_ENGINE_SESSION: Optional[aiohttp.ClientSession] = None
+_SEARCH_ENGINE_LOCK = asyncio.Lock()
+
+_ANALYZER_SESSION: Optional[aiohttp.ClientSession] = None
+_ANALYZER_LOCK = asyncio.Lock()
 
 
 async def get_global_session(domain: str) -> aiohttp.ClientSession:
     """Retrieve or create a globally shared ClientSession per domain for scraping."""
     async with _GLOBAL_SESSIONS_LOCK:
+        # Bounded LRU-style eviction if max capacity reached
+        if len(_GLOBAL_SESSIONS) >= _MAX_DOMAIN_SESSIONS and domain not in _GLOBAL_SESSIONS:
+            oldest_domain, oldest_session = next(iter(_GLOBAL_SESSIONS.items()))
+            if not oldest_session.closed:
+                await oldest_session.close()
+            del _GLOBAL_SESSIONS[oldest_domain]
+
         session = _GLOBAL_SESSIONS.get(domain)
         if session is None or session.closed:
             jar = aiohttp.CookieJar(unsafe=True)
@@ -92,27 +110,6 @@ async def get_global_session(domain: str) -> aiohttp.ClientSession:
         return session
 
 
-async def close_global_sessions() -> None:
-    """Gracefully close all globally cached sessions at application shutdown."""
-    async with _GLOBAL_SESSIONS_LOCK:
-        for domain, session in list(_GLOBAL_SESSIONS.items()):
-            if not session.closed:
-                await session.close()
-        _GLOBAL_SESSIONS.clear()
-        
-        global _SEARCH_ENGINE_SESSION
-        if _SEARCH_ENGINE_SESSION is not None and not _SEARCH_ENGINE_SESSION.closed:
-            await _SEARCH_ENGINE_SESSION.close()
-        _SEARCH_ENGINE_SESSION = None
-
-
-_SEARCH_ENGINE_SESSION: Optional[aiohttp.ClientSession] = None
-_SEARCH_ENGINE_LOCK = asyncio.Lock()
-
-_ANALYZER_SESSION: Optional[aiohttp.ClientSession] = None
-_ANALYZER_LOCK = asyncio.Lock()
-
-
 async def get_search_engine_session() -> aiohttp.ClientSession:
     """Retrieve or create a globally shared ClientSession for all search engines."""
     global _SEARCH_ENGINE_SESSION
@@ -125,7 +122,6 @@ async def get_search_engine_session() -> aiohttp.ClientSession:
                     force_close=False,
                     enable_cleanup_closed=True,
                     resolver=SafeResolver(),
-                    ssl=False,
                 )
                 timeout = aiohttp.ClientTimeout(total=config.request_timeout)
                 _SEARCH_ENGINE_SESSION = aiohttp.ClientSession(
@@ -153,15 +149,18 @@ async def close_global_sessions() -> None:
             if not session.closed:
                 await session.close()
         _GLOBAL_SESSIONS.clear()
-        
-        global _SEARCH_ENGINE_SESSION
+
+    global _SEARCH_ENGINE_SESSION
+    async with _SEARCH_ENGINE_LOCK:
         if _SEARCH_ENGINE_SESSION is not None and not _SEARCH_ENGINE_SESSION.closed:
             await _SEARCH_ENGINE_SESSION.close()
         _SEARCH_ENGINE_SESSION = None
 
-        global _ANALYZER_SESSION
+    global _ANALYZER_SESSION
+    async with _ANALYZER_LOCK:
         if _ANALYZER_SESSION is not None and not _ANALYZER_SESSION.closed:
             await _ANALYZER_SESSION.close()
         _ANALYZER_SESSION = None
+
 
 

@@ -319,12 +319,15 @@ async def api_search_stream(
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"},
         )
 
-    # ── Event queue: backend → SSE generator ──
-    event_queue: asyncio.Queue = asyncio.Queue()
+    # ── Event queue: backend → SSE generator (maxsize=1000 for backpressure safety) ──
+    event_queue: asyncio.Queue = asyncio.Queue(maxsize=1000)
 
     def on_event(event_type: str, payload: Dict[str, Any]) -> None:
         """Callback fired by SearchEngine & DeepScraper to push live events."""
-        event_queue.put_nowait((event_type, payload))
+        try:
+            event_queue.put_nowait((event_type, payload))
+        except asyncio.QueueFull:
+            pass  # Prevent queue inflation if client reads slowly
 
     async def pipeline():
         """Run the full 5-stage search pipeline, feeding events into the queue."""

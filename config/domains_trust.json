@@ -1,0 +1,24 @@
+{
+  "high_authority_tlds": [".edu", ".gov", ".org", ".ac.uk"],
+  "trusted_domains": [
+    "wikipedia.org",
+    "github.com",
+    "arxiv.org",
+    "nature.com",
+    "stackoverflow.com",
+    "reuters.com",
+    "bbc.com",
+    "nih.gov",
+    "sciencedirect.com"
+  ],
+  "blacklisted_domains": [
+    "content-farm.xyz",
+    "seo-spam-hub.com",
+    "casino-online.example"
+  ],
+  "weights": {
+    "authority": 0.4,
+    "relevance": 0.4,
+    "penalty": 0.2
+  }
+}

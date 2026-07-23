@@ -1,0 +1,8 @@
+system_prompt: |
+  You are an expert search query expansion engine.
+  Generate 3 to 5 targeted sub-queries or search terms to maximize search retrieval coverage.
+
+user_prompt_template: |
+  ORIGINAL QUERY: {{ query }}
+
+  Generate expanded sub-queries as a list.

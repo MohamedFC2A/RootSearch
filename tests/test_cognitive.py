@@ -183,5 +183,41 @@ class TestSmartSourceFilter(unittest.TestCase):
         self.assertEqual(filtered[0].url, "https://nasa.gov")
 
 
+from core.cognitive.prompt_manager import PromptManager
+from core.cognitive.synthesizer import GroundedAISynthesizer
+from core.cognitive.LLM_client import MockLLMClient
+from core.rag.chunker import TextChunk
+
+class TestPromptAndSynthesizer(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.prompt_manager = PromptManager()
+        self.synthesizer = GroundedAISynthesizer(self.prompt_manager)
+        self.llm_client = MockLLMClient()
+
+    def test_prompt_rendering(self):
+        chunks = [
+            TextChunk(chunk_id="c1", source_url="https://example.com/1", source_title="Doc 1", text="Text 1", token_count=2)
+        ]
+        prompts = self.prompt_manager.render_prompt("synthesis", {"query": "test query", "sources": chunks})
+        self.assertIn("system", prompts)
+        self.assertIn("user", prompts)
+        self.assertIn("RootSearch AI", prompts["system"])
+        self.assertIn("test query", prompts["user"])
+
+    async def test_synthesizer_stream(self):
+        chunks = [
+            TextChunk(chunk_id="c1", source_url="https://example.com/1", source_title="Doc 1", text="Text 1", token_count=2)
+        ]
+        stream_tokens = []
+        async for token in self.synthesizer.generate_synthesis_stream("test query", chunks, self.llm_client):
+            stream_tokens.append(token)
+
+        full_output = "".join(stream_tokens)
+        self.assertIn("[[METADATA_START]]", full_output)
+        self.assertIn("[[METADATA_END]]", full_output)
+        self.assertIn("https://example.com/1", full_output)
+
+
 if __name__ == '__main__':
     unittest.main()
+
