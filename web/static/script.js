@@ -495,13 +495,7 @@ function showToast(message, type = 'info', duration = 4500) {
 // ─── SYSTEM DIAGNOSTICS & RETRY ───────────────────────────────
 async function loadSystemStatus() {
     try {
-        const res = await fetch(`${API_BASE}/api/status`, {
-            headers: {
-                'ngrok-skip-browser-warning': '1',
-                'bypass-tunnel-reminder': '1',
-                'X-Requested-With': 'XMLHttpRequest'
-            }
-        });
+        const res = await fetch(`${API_BASE}/api/status`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
         if (data.fathom_s1_max_sources) systemLimits.fathom_s1_max_sources = data.fathom_s1_max_sources;
@@ -531,13 +525,7 @@ async function retryConnection() {
     const banner = document.getElementById('diagnosticBanner');
     setStatusDot('idle', 'Rechecking...');
     try {
-        const res = await fetch(`${API_BASE}/api/status`, {
-            headers: {
-                'ngrok-skip-browser-warning': '1',
-                'bypass-tunnel-reminder': '1',
-                'X-Requested-With': 'XMLHttpRequest'
-            }
-        });
+        const res = await fetch(`${API_BASE}/api/status`);
         if (res.ok) {
             const data = await res.json();
             if (data.fathom_s1_max_sources) systemLimits.fathom_s1_max_sources = data.fathom_s1_max_sources;

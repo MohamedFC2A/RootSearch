@@ -74,24 +74,12 @@ _allow_origins = ["*"] if _origins_env == "*" else [
 ]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=_allow_origins,
+    allow_origins=["*"],
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
     expose_headers=["*"],
 )
-
-@app.options("/{path:path}")
-async def options_handler(request: Request, path: str):
-    return JSONResponse(
-        content="OK",
-        status_code=200,
-        headers={
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
-            "Access-Control-Allow-Headers": "*",
-        },
-    )
 
 from fastapi.exceptions import RequestValidationError
 
