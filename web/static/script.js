@@ -531,7 +531,13 @@ async function retryConnection() {
     const banner = document.getElementById('diagnosticBanner');
     setStatusDot('idle', 'Rechecking...');
     try {
-        const res = await fetch(`${API_BASE}/api/status`);
+        const res = await fetch(`${API_BASE}/api/status`, {
+            headers: {
+                'ngrok-skip-browser-warning': '1',
+                'bypass-tunnel-reminder': '1',
+                'X-Requested-With': 'XMLHttpRequest'
+            }
+        });
         if (res.ok) {
             const data = await res.json();
             if (data.fathom_s1_max_sources) systemLimits.fathom_s1_max_sources = data.fathom_s1_max_sources;

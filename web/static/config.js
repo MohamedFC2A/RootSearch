@@ -46,6 +46,8 @@
       }
       return window.API_BASE;
     })();
+  }
+
   window.STREAM_CONFIG = {
     MAX_RECONNECT_ATTEMPTS: 3,
     RECONNECT_DELAYS_MS: [1000, 3000, 7000],
@@ -54,4 +56,3 @@
     MIN_QUERY_LENGTH: 20
   };
 })();
-
