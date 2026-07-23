@@ -3,7 +3,7 @@
   "framework": null,
   "cleanUrls": true,
   "installCommand": "echo no-install-needed",
-  "buildCommand": "mkdir -p public/static && cp web/templates/index.html public/index.html && cp web/templates/compare.html public/compare.html && cp web/templates/results.html public/results.html && cp -r web/static/. public/static/",
+  "buildCommand": "node build_vercel.js",
   "outputDirectory": "public",
   "rewrites": [
     { "source": "/compare", "destination": "/compare.html" },
