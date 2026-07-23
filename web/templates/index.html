@@ -195,7 +195,6 @@
             <div class="search-tips" id="searchTips">
                 <span class="tip"><i class="fas fa-lightbulb"></i> جرب أسئلة معقدة</span>
                 <span class="tip"><i class="fas fa-globe"></i> جميع المصادر</span>
-                <span class="tip"><i class="fas fa-robot"></i> تحليل ذكي</span>
             </div>
         </div>
     </section>
@@ -314,17 +313,21 @@
             <button class="tab-btn" id="tab_analysis" role="tab" aria-selected="false" onclick="switchTab('analysis')">
                 <i class="fas fa-brain" aria-hidden="true"></i><span>التحليل</span>
             </button>
-            <button class="tab-btn" id="tab_results" role="tab" aria-selected="false" onclick="switchTab('results')">
+            <button class="tab-btn" id="tab_sources" role="tab" aria-selected="false" onclick="switchTab('sources')">
+                <i class="fas fa-database" aria-hidden="true"></i><span>المصادر</span>
+            </button>
+            <button class="tab-btn" id="tab_results" role="tab" aria-selected="false" onclick="switchTab('results')" style="display:none">
                 <i class="fas fa-list-ul" aria-hidden="true"></i><span>النتائج</span>
             </button>
         </nav>
+
 
         <!-- ─── LIVE SEARCH TREE ─────────────────────────── -->
         <div id="searchTreeContainer" class="tab-content" role="tabpanel" aria-labelledby="tab_tree">
             <div class="tree-topbar">
                 <div class="tree-title-row">
-                    <i class="fas fa-code-branch tree-icon"></i>
-                    <h2 class="tree-title">مسار تتبع البحث</h2>
+                    <i class="fas fa-terminal tree-icon"></i>
+                    <h2 class="tree-title">مسار تتبع الوكيل الذكي (Agent Search Stream)</h2>
                     <span class="tree-live-badge" id="treeLiveBadge">
                         <span class="live-pulse"></span> مباشر
                     </span>
@@ -332,29 +335,84 @@
                 <p class="tree-status-line" id="treeStatus">في انتظار بدء الاستعلام...</p>
             </div>
 
-            <!-- Tree Canvas (live columns layout) -->
-            <div class="tree-canvas-wrap" id="treeCanvasWrap">
-                <div class="tree-canvas" id="treeCanvas">
-                    <div class="tree-col" id="col_trigger"></div>
-                    <div class="tree-col-connector"><div class="connector-line"></div></div>
-                    <div class="tree-col" id="col_source_discovery"></div>
-                    <div class="tree-col-connector"><div class="connector-line"></div></div>
-                    <div class="tree-col" id="col_extraction"></div>
-                    <div class="tree-col-connector"><div class="connector-line"></div></div>
-                    <div class="tree-col" id="col_semantic_analysis"></div>
-                    <div class="tree-col-connector"><div class="connector-line"></div></div>
-                    <div class="tree-col" id="col_verification"></div>
+            <!-- Cursor UI Layout Wrapper -->
+            <div class="agent-layout-wrap" id="agentLayoutWrap">
+                <!-- Left Panel: Vertical Steps Timeline -->
+                <div class="agent-stream-panel">
+                    <!-- Stage 0: Trigger -->
+                    <div class="agent-stage-block" id="stage_block_trigger" data-stage="trigger" data-status="pending">
+                        <div class="agent-stage-header" onclick="toggleStageBlock('trigger')">
+                            <span class="stage-status-icon"><i class="fas fa-play"></i></span>
+                            <span class="stage-title-text">بدء الاستعلام والتحضير</span>
+                            <span class="stage-chevron"><i class="fas fa-chevron-down"></i></span>
+                        </div>
+                        <div class="agent-stage-body" id="stage_body_trigger">
+                            <div class="agent-stage-logs" id="logs_trigger"></div>
+                        </div>
+                    </div>
+
+                    <!-- Stage 1: Source Discovery -->
+                    <div class="agent-stage-block" id="stage_block_source_discovery" data-stage="source_discovery" data-status="pending">
+                        <div class="agent-stage-header" onclick="toggleStageBlock('source_discovery')">
+                            <span class="stage-status-icon"><i class="fas fa-search"></i></span>
+                            <span class="stage-title-text">اكتشاف المصادر وتوسيع الاستعلام</span>
+                            <span class="stage-chevron"><i class="fas fa-chevron-down"></i></span>
+                        </div>
+                        <div class="agent-stage-body" id="stage_body_source_discovery">
+                            <div class="agent-stage-logs" id="logs_source_discovery"></div>
+                        </div>
+                    </div>
+
+                    <!-- Stage 2: Extraction -->
+                    <div class="agent-stage-block" id="stage_block_extraction" data-stage="extraction" data-status="pending">
+                        <div class="agent-stage-header" onclick="toggleStageBlock('extraction')">
+                            <span class="stage-status-icon"><i class="fas fa-spider"></i></span>
+                            <span class="stage-title-text">الزحف واستخراج محتوى الصفحات</span>
+                            <span class="stage-chevron"><i class="fas fa-chevron-down"></i></span>
+                        </div>
+                        <div class="agent-stage-body" id="stage_body_extraction">
+                            <div class="agent-stage-logs" id="logs_extraction"></div>
+                        </div>
+                    </div>
+
+                    <!-- Stage 3: Semantic Analysis -->
+                    <div class="agent-stage-block" id="stage_block_semantic_analysis" data-stage="semantic_analysis" data-status="pending">
+                        <div class="agent-stage-header" onclick="toggleStageBlock('semantic_analysis')">
+                            <span class="stage-status-icon"><i class="fas fa-brain"></i></span>
+                            <span class="stage-title-text">التحليل الدلالي والتصفية بالذكاء الاصطناعي</span>
+                            <span class="stage-chevron"><i class="fas fa-chevron-down"></i></span>
+                        </div>
+                        <div class="agent-stage-body" id="stage_body_semantic_analysis">
+                            <div class="agent-stage-logs" id="logs_semantic_analysis"></div>
+                        </div>
+                    </div>
+
+                    <!-- Stage 4: Verification -->
+                    <div class="agent-stage-block" id="stage_block_verification" data-stage="verification" data-status="pending">
+                        <div class="agent-stage-header" onclick="toggleStageBlock('verification')">
+                            <span class="stage-status-icon"><i class="fas fa-shield-alt"></i></span>
+                            <span class="stage-title-text">التدقيق والتحقق من الحقائق (K-Trust)</span>
+                            <span class="stage-chevron"><i class="fas fa-chevron-down"></i></span>
+                        </div>
+                        <div class="agent-stage-body" id="stage_body_verification">
+                            <div class="agent-stage-logs" id="logs_verification"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Right Panel: Node Inspector -->
+                <div class="agent-inspector-panel" id="agentInspectorPanel">
+                    <div class="inspector-placeholder" id="inspectorPlaceholder">
+                        <i class="fas fa-info-circle"></i>
+                        <p>اضغط على أي عملية أو مصدر في الخط الزمني لعرض بيانات التتبع الدقيقة والتحليل الفوري.</p>
+                    </div>
+                    <div class="inspector-content" id="inspectorContent" style="display: none;">
+                        <!-- Injected dynamically by script.js -->
+                    </div>
                 </div>
             </div>
-
-            <!-- Mobile bottom sheet for node details -->
-            <div class="node-sheet" id="nodeSheet" aria-hidden="true">
-                <div class="sheet-handle"></div>
-                <div class="sheet-content" id="sheetContent"></div>
-                <button class="sheet-close" onclick="closeNodeSheet()">إغلاق</button>
-            </div>
-            <div class="sheet-backdrop" id="sheetBackdrop" onclick="closeNodeSheet()"></div>
         </div>
+
 
         <!-- ─── SOURCES GRAPH ──────────────────────────── -->
         <div id="knowledgeGraphContainer" class="tab-content is-hidden" role="tabpanel" aria-labelledby="tab_graph">
@@ -370,9 +428,9 @@
                 </div>
             </div>
             <div class="graph-layout" style="display: block;">
-                <div class="live-tree-canvas-container" id="liveTreeCanvasContainer" style="position: relative; width: 100%; height: 600px; background: rgba(9, 13, 22, 0.45); border: 1px solid var(--border); border-radius: var(--r-lg); overflow: hidden;">
+                <div class="live-tree-canvas-container" id="liveTreeCanvasContainer" style="position: relative; width: 100%; height: 600px; background: rgba(0, 0, 0, 0.6); border: 1px solid var(--border); border-radius: var(--r-lg); overflow: hidden;">
                     <div id="liveTreeCanvas" style="width: 100%; height: 100%;"></div>
-                    <div class="graph-legend-overlay" style="position: absolute; bottom: 12px; right: 12px; display: flex; gap: var(--sp-3); background: rgba(15, 22, 36, 0.9); padding: var(--sp-2) var(--sp-3); border-radius: var(--r-md); border: 1px solid var(--border); font-size: 11px; color: var(--text-muted); backdrop-filter: blur(8px); z-index: 10; flex-wrap: wrap;">
+                    <div class="graph-legend-overlay" style="position: absolute; bottom: 12px; right: 12px; display: flex; gap: var(--sp-3); background: rgba(10, 10, 10, 0.95); padding: var(--sp-2) var(--sp-3); border-radius: var(--r-md); border: 1px solid var(--border); font-size: 11px; color: var(--text-muted); backdrop-filter: blur(8px); z-index: 10; flex-wrap: wrap;">
                         <span style="display:flex;align-items:center;gap:6px;"><span style="width:8px;height:8px;border-radius:50%;background:#8B5CF6;display:inline-block;"></span>الاستعلام الرئيسي</span>
                         <span style="display:flex;align-items:center;gap:6px;"><span style="width:8px;height:8px;border-radius:50%;background:#3B82F6;display:inline-block;"></span>استعلام فرعي</span>
                         <span style="display:flex;align-items:center;gap:6px;"><span style="width:8px;height:8px;border-radius:50%;background:#6366F1;display:inline-block;"></span>محركات البحث</span>
@@ -395,9 +453,9 @@
                     <div class="a-card-header"><i class="fas fa-tags"></i><h3>الكلمات المفتاحية</h3></div>
                     <div class="a-card-body" id="keywordsContent"></div>
                 </div>
-                <div class="a-card" id="fuckenbaseCard">
+                <div class="a-card" id="rootbaseCard">
                     <div class="a-card-header"><i class="fas fa-layer-group"></i><h3>ROOTBASE — التحليلات الفائقة</h3></div>
-                    <div class="a-card-body" id="fuckenbaseContent"><div class="skeleton-loader"></div></div>
+                    <div class="a-card-body" id="rootbaseContent"><div class="skeleton-loader"></div></div>
                 </div>
                 <div class="a-card" id="statsCard">
                     <div class="a-card-header"><i class="fas fa-chart-bar"></i><h3>الإحصائيات</h3></div>
@@ -406,7 +464,63 @@
             </div>
         </div>
 
-        <!-- ─── RESULTS LIST ──────────────────────────────── -->
+        <!-- ─── SOURCES PAGE ──────────────────────────────── -->
+        <div id="sourcesPanel" class="tab-content is-hidden" role="tabpanel" aria-labelledby="tab_sources">
+            <!-- Sources Header -->
+            <div class="sources-page-header">
+                <div class="sph-title-row">
+                    <div class="sph-left">
+                        <i class="fas fa-database sph-icon"></i>
+                        <div>
+                            <h2>قاعدة المصادر المعرفية</h2>
+                            <p id="sourcesSubtitle">جميع المصادر المحللة ومرتبة حسب الصلة بالموضوع</p>
+                        </div>
+                    </div>
+                    <div class="sph-right">
+                        <div class="sources-stats-bar" id="sourcesStatsBar">
+                            <div class="ssb-item">
+                                <span class="ssb-val" id="srcTotalCount">—</span>
+                                <span class="ssb-label">مجموع</span>
+                            </div>
+                            <div class="ssb-item">
+                                <span class="ssb-val" id="srcUniqueCount">—</span>
+                                <span class="ssb-label">فريد</span>
+                            </div>
+                            <div class="ssb-item">
+                                <span class="ssb-val" id="srcAvgRel">—</span>
+                                <span class="ssb-label">متوسط الصلة</span>
+                            </div>
+                            <div class="ssb-item">
+                                <span class="ssb-val" id="srcCatCount">—</span>
+                                <span class="ssb-label">فئة</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <!-- Filter & Sort bar -->
+                <div class="sources-filter-bar" id="sourcesFilterBar">
+                    <div class="sfb-search-wrap">
+                        <i class="fas fa-search sfb-search-icon"></i>
+                        <input type="text" id="sourcesSearchInput" class="sfb-search" placeholder="ابحث في المصادر..." oninput="filterSourcesList(this.value)" />
+                    </div>
+                    <select class="sfb-sort" id="sourcesSortSelect" onchange="sortSourcesList(this.value)">
+                        <option value="relevance">ترتيب: الصلة</option>
+                        <option value="credibility">ترتيب: المصداقية</option>
+                        <option value="words">ترتيب: حجم المحتوى</option>
+                        <option value="domain">ترتيب: النطاق</option>
+                    </select>
+                </div>
+            </div>
+            <!-- Sources list -->
+            <div class="sources-full-list" id="sourcesFullList">
+                <div class="loading-state">
+                    <div class="loader-rings"><div></div><div></div><div></div></div>
+                    <p>جاري تحميل المصادر...</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- ─── RESULTS LIST (hidden, internal use) ─────── -->
         <div id="resultsListWrapper" class="tab-content is-hidden" role="tabpanel" aria-labelledby="tab_results">
             <div class="mobile-filter-bar">
                 <button type="button" class="mobile-filter-trigger" id="mobileFilterTriggerBtn" onclick="openFilterSheet()">
@@ -425,12 +539,12 @@
             <div class="pagination" id="pagination"></div>
         </div>
     </section>
+
 </main>
 
 <!-- Footer -->
 <footer class="site-footer">
-    <p>RootSearch Demo 1 T — Deep Intelligence Search Engine</p>
-    <p class="footer-sub">تحليل بالذكاء الاصطناعي · شجرة بحث حية · استخراج مصادر متقدم</p>
+    <p>RootSearch — Deep Intelligence Search Engine</p>
 </footer>
 
 <!-- Keyword Modal -->
@@ -498,6 +612,6 @@
 <div class="sheet-backdrop" id="filterSheetBackdrop" onclick="closeFilterSheet()"></div>
 
 <script src="/static/config.js"></script>
-<script src="/static/script.js?v=7"></script>
+<script src="/static/script.js?v=8"></script>
 </body>
 </html>

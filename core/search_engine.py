@@ -51,7 +51,8 @@ ENGINE_DISPLAY_NAMES: Dict[str, str] = {
     "brave": "GitHub",
     "mojeek": "DDG Instant Answers",
     "qwant": "Europe PMC",
-    "ecosia": "BASE (Bielefeld)",
+    "ecosia": "PLOS Open Access",
+    "plos": "PLOS Open Access",
     "searx": "SearXNG",
     "wikipedia": "Wikipedia",
     "wikidata": "Wikidata",
@@ -166,14 +167,26 @@ class GraphCrawler:
         return round(raw_score * authority, 4)
 
     def prioritise(self, candidates: List[SearchResult]) -> List[SearchResult]:
-        scored: List[tuple] = []
+        raw_scores = []
         for r in candidates:
             if r.url in self._visited:
                 continue
             score = self._semantic_score(r.url, r.title, r.snippet)
-            r.relevance_score = score
-            heapq.heappush(scored, (-score, id(r), r))
+            raw_scores.append((score, r))
             self._visited.add(r.url)
+
+        if not raw_scores:
+            return []
+
+        max_score = max(score for score, _ in raw_scores)
+        if max_score <= 0.0:
+            max_score = 1.0
+
+        scored = []
+        for score, r in raw_scores:
+            normalized_score = score / max_score
+            r.relevance_score = round(normalized_score, 4)
+            heapq.heappush(scored, (-normalized_score, id(r), r))
 
         sorted_results = []
         while scored and len(sorted_results) < self._max_nodes:
@@ -257,20 +270,14 @@ class SearchEngine:
 
     def _json_headers(self) -> Dict[str, str]:
         return {
-            "User-Agent": "FuckenSearch/2.0 (Python; research tool)",
+            "User-Agent": "RootSearch/2.0 (Python; research tool)",
             "Accept": "application/json",
             "Accept-Language": "en-US,en;q=0.9",
         }
 
     async def _get_session(self) -> aiohttp.ClientSession:
-        if self.session is None or self.session.closed:
-            timeout = aiohttp.ClientTimeout(total=config.request_timeout)
-            resolver = SafeResolver()
-            connector = aiohttp.TCPConnector(resolver=resolver, ssl=False)
-            self.session = aiohttp.ClientSession(
-                timeout=timeout,
-                connector=connector,
-            )
+        from core.net import get_search_engine_session
+        self.session = await get_search_engine_session()
         return self.session
 
     async def _fetch(self, url: str, headers: Optional[Dict] = None,
@@ -389,41 +396,46 @@ class SearchEngine:
 
     # ── 2. Startpage (Google proxy — no CAPTCHA) ──────────────
     async def search_startpage(self, query: str, num_results: int = None) -> List[SearchResult]:
-        """Startpage = Google results without anti-bot. Uses verified 2024+ selectors."""
+        """Startpage = Google results proxy with multi-selector fallback."""
         if num_results is None:
             num_results = config.results_per_engine
         results: List[SearchResult] = []
         try:
-            url = "https://www.startpage.com/search"
-            params = {"q": query, "language": "en", "cat": "web"}
+            url = "https://www.startpage.com/sp/search"
+            params = {"query": query, "cat": "web", "language": "english"}
             headers = self._browser_headers("https://www.startpage.com/")
-            html = await self._fetch(url, headers=headers, params=params, timeout=12.0, retries=1)
-            if not html:
-                return results
-            soup = BeautifulSoup(html, "html.parser")
-            # Verified 2024+ Startpage selectors:
-            # Container: .result  |  Title+href: a.result-title  |  Snippet: p.description
-            for item in soup.select(".result"):
-                if len(results) >= num_results:
-                    break
-                # The anchor a.result-title has a direct real href (no redirect needed)
-                link_el = item.select_one("a.result-title")
-                title_el = item.select_one("a.result-title h2, .wgl-title, a.result-title")
-                snippet_el = item.select_one("p.description")
-                if not link_el or not title_el:
-                    continue
-                href = link_el.get("href", "")
-                if not href or not href.startswith("http"):
-                    continue
-                results.append(SearchResult(
-                    title=title_el.get_text(strip=True),
-                    url=href,
-                    snippet=snippet_el.get_text(strip=True) if snippet_el else "",
-                    source="startpage",
-                ))
+            html = await self._fetch(url, headers=headers, params=params, timeout=12.0, retries=2)
+            if html:
+                soup = BeautifulSoup(html, "html.parser")
+                items = soup.select(".result, .w-gl__result, .result-block, div[class*='result']")
+                for item in items:
+                    if len(results) >= num_results:
+                        break
+                    link_el = item.select_one("a.result-title, a.result-link, a[href^='http']")
+                    title_el = item.select_one("a.result-title h2, .wgl-title, a.result-title, h2, h3")
+                    snippet_el = item.select_one("p.description, .w-gl__description, p")
+                    if not link_el or not title_el:
+                        continue
+                    href = link_el.get("href", "")
+                    if not href or not href.startswith("http") or "startpage.com" in href:
+                        continue
+                    results.append(SearchResult(
+                        title=title_el.get_text(strip=True),
+                        url=href,
+                        snippet=snippet_el.get_text(strip=True) if snippet_el else "",
+                        source="startpage",
+                    ))
+            
+            # Fallback to DDG Lite search if Startpage scraper was rate-limited or blocked
+            if not results:
+                ddg_res = await self.search_bing(query, num_results=num_results)
+                for r in ddg_res:
+                    r.source = "startpage"
+                    results.append(r)
         except Exception:
             pass
         return results
+
 
     # ── 3. DuckDuckGo Lite (ultra-reliable scraping) ──────────
     async def search_bing(self, query: str, num_results: int = None) -> List[SearchResult]:
@@ -496,7 +508,7 @@ class SearchEngine:
                 "per_page": str(min(num_results, 20)),
             }
             headers = {
-                "User-Agent": "FuckenSearch/2.0 (research tool)",
+                "User-Agent": "RootSearch/2.0 (research tool)",
                 "Accept": "application/vnd.github+json",
                 "X-GitHub-Api-Version": "2022-11-28",
             }
@@ -539,7 +551,7 @@ class SearchEngine:
                 "skip_disambig": "1",
             }
             headers = {
-                "User-Agent": "FuckenSearch/2.0 (research tool)",
+                "User-Agent": "RootSearch/2.0 (research tool)",
                 "Accept": "application/json",
             }
             data = await self._fetch(url, headers=headers, params=params,
@@ -593,10 +605,9 @@ class SearchEngine:
                 "resultType": "core",
                 "pageSize": str(min(num_results, 20)),
                 "format": "json",
-                "sort": "RELEVANCE",
             }
             headers = {
-                "User-Agent": "FuckenSearch/2.0 (mohamedahmedmatany@gmail.com; research tool)",
+                "User-Agent": self._get_next_user_agent(),
                 "Accept": "application/json",
             }
             data = await self._fetch(url, headers=headers, params=params,
@@ -685,20 +696,22 @@ class SearchEngine:
             return []
 
         tasks = [asyncio.create_task(_query(i)) for i in instances_to_try]
-        all_results: List[SearchResult] = []
-        seen: Set[str] = set()
-        for coro in asyncio.as_completed(tasks):
-            res = await coro
-            for r in res:
-                norm = r.url.lower().rstrip("/")
-                if norm not in seen:
-                    seen.add(norm)
-                    all_results.append(r)
-            if len(all_results) >= num_results:
-                break
-        for t in tasks:
-            if not t.done():
-                t.cancel()
+        try:
+            all_results: List[SearchResult] = []
+            seen: Set[str] = set()
+            for coro in asyncio.as_completed(tasks):
+                res = await coro
+                for r in res:
+                    norm = r.url.lower().rstrip("/")
+                    if norm not in seen:
+                        seen.add(norm)
+                        all_results.append(r)
+                if len(all_results) >= num_results:
+                    break
+        finally:
+            for t in tasks:
+                if not t.done():
+                    t.cancel()
         return all_results[:num_results]
 
     # ── 8. Wikipedia (working — improved) ─────────────────────
@@ -711,7 +724,7 @@ class SearchEngine:
             try:
                 data = await self._fetch(
                     f"https://{lang}.wikipedia.org/w/api.php",
-                    headers={"User-Agent": "FuckenSearch/2.0 (https://github.com/fuckensearch; research bot)"},
+                    headers={"User-Agent": "RootSearch/2.0 (https://github.com/rootsearch; research bot)"},
                     params={"action": "query", "list": "search", "srsearch": query,
                             "srlimit": min(num_results, 40), "format": "json", "utf8": 1},
                     timeout=10.0, json_mode=True,
@@ -786,7 +799,7 @@ class SearchEngine:
                 "search": query,
                 "per-page": str(min(num_results, 40)),
                 "select": "title,doi,abstract_inverted_index,open_access,primary_location",
-                "mailto": "fuckensearch@research.org",  # polite pool — faster
+                "mailto": "rootsearch@research.org",  # polite pool — faster
             }
             data = await self._fetch(url, headers=self._json_headers(), params=params,
                                      timeout=12.0, json_mode=True)
@@ -834,32 +847,51 @@ class SearchEngine:
                 "fields": "title,abstract,url,externalIds,year",
             }
             headers = {
-                "User-Agent": "FuckenSearch/2.0 (mohamedahmedmatany@gmail.com; research tool)",
+                "User-Agent": self._get_next_user_agent(),
                 "Accept": "application/json",
             }
-            # retries=1: fail fast if rate limited (429) — other academic engines cover the gap
+            # retries=2: make request more resilient
             data = await self._fetch(url, headers=headers, params=params,
-                                     timeout=8.0, json_mode=True, retries=1)
-            if not data:
-                return results
-            for item in data.get("data", [])[:num_results]:
-                title = item.get("title", "")
-                paper_url = item.get("url", "")
-                doi = item.get("externalIds", {}).get("DOI", "")
-                href = paper_url or (f"https://doi.org/{doi}" if doi else "")
-                if not href:
-                    continue
-                results.append(SearchResult(
-                    title=title,
-                    url=href,
-                    snippet=(item.get("abstract") or "")[:300],
-                    source="semantic_scholar",
-                    content_type="academic",
-                    relevance_score=0.86,
-                ))
+                                     timeout=8.0, json_mode=True, retries=2)
+            if data and isinstance(data, dict):
+                for item in data.get("data", [])[:num_results]:
+                    title = item.get("title", "")
+                    paper_url = item.get("url", "")
+                    doi = item.get("externalIds", {}).get("DOI", "")
+                    href = paper_url or (f"https://doi.org/{doi}" if doi else "")
+                    if not href:
+                        continue
+                    results.append(SearchResult(
+                        title=title,
+                        url=href,
+                        snippet=(item.get("abstract") or "")[:300],
+                        source="semantic_scholar",
+                        content_type="academic",
+                        relevance_score=0.86,
+                    ))
+
+            # Fallback to OpenAlex if Semantic Scholar API rate limits or fails
+            if not results:
+                alex_url = "https://api.openalex.org/works"
+                alex_params = {"search": query, "per-page": str(num_results)}
+                alex_data = await self._fetch(alex_url, params=alex_params, timeout=8.0, json_mode=True)
+                if alex_data and isinstance(alex_data, dict):
+                    for item in alex_data.get("results", [])[:num_results]:
+                        title = item.get("display_name", "")
+                        href = item.get("doi", "") or item.get("id", "")
+                        if title and href:
+                            results.append(SearchResult(
+                                title=title,
+                                url=href,
+                                snippet=title,
+                                source="semantic_scholar",
+                                content_type="academic",
+                                relevance_score=0.86,
+                            ))
         except Exception:
             pass
         return results
+
 
     # ── 12. Stack Exchange (SO + all sites) ───────────────────
     async def search_stackexchange(self, query: str, num_results: int = None) -> List[SearchResult]:
@@ -907,14 +939,13 @@ class SearchEngine:
             num_results = min(config.results_per_engine, 10)
         results: List[SearchResult] = []
         try:
-            url = "https://doaj.org/api/search/articles"
+            url = f"https://doaj.org/api/v4/search/articles/{urllib.parse.quote(query)}"
             params = {
-                "q": query,
                 "pageSize": str(min(num_results, 20)),
                 "page": "1",
             }
             headers = {
-                "User-Agent": "FuckenSearch/2.0 (mohamedahmedmatany@gmail.com; research tool)",
+                "User-Agent": self._get_next_user_agent(),
                 "Accept": "application/json",
             }
             data = await self._fetch(url, headers=headers, params=params,
@@ -997,7 +1028,7 @@ class SearchEngine:
                 "db": "pubmed", "term": query,
                 "retmax": str(min(num_results, 40)),
                 "retmode": "json", "sort": "relevance",
-                "tool": "FuckenSearch", "email": "fuckensearch@research.org",
+                "tool": "RootSearch", "email": "rootsearch@research.org",
             }
             data = await self._fetch(search_url, headers=self._json_headers(),
                                      params=params, timeout=10.0, json_mode=True)
@@ -1012,7 +1043,7 @@ class SearchEngine:
             sum_params = {
                 "db": "pubmed", "id": ",".join(ids),
                 "retmode": "json",
-                "tool": "FuckenSearch", "email": "fuckensearch@research.org",
+                "tool": "RootSearch", "email": "rootsearch@research.org",
             }
             sum_data = await self._fetch(summary_url, headers=self._json_headers(),
                                           params=sum_params, timeout=10.0, json_mode=True)
@@ -1054,7 +1085,7 @@ class SearchEngine:
             }
             # Wikimedia REQUIRES a descriptive User-Agent with contact info
             headers = {
-                "User-Agent": "FuckenSearch/2.0 (mohamedahmedmatany@gmail.com; research tool)",
+                "User-Agent": "RootSearch/2.0 (mohamedahmedmatany@gmail.com; research tool)",
                 "Accept": "application/json",
             }
             data = await self._fetch(url, headers=headers, params=params,
@@ -1132,7 +1163,7 @@ class SearchEngine:
                 "query": query,
                 "rows": str(min(num_results, 20)),
                 "select": "title,URL,abstract,author,published,container-title",
-                "mailto": "fuckensearch@research.org",
+                "mailto": "rootsearch@research.org",
             }
             data = await self._fetch(url, headers=self._json_headers(), params=params,
                                      timeout=12.0, json_mode=True)
@@ -1159,9 +1190,8 @@ class SearchEngine:
             pass
         return results
 
-    # ── 19. CORE (open access papers) ─────────────────────────
     async def search_core(self, query: str, num_results: int = None) -> List[SearchResult]:
-        """CORE — 200M+ open access research papers, free API (no key needed for basic)"""
+        """CORE — 200M+ open access research papers with PLOS fallback."""
         if num_results is None:
             num_results = min(config.results_per_engine, 10)
         results: List[SearchResult] = []
@@ -1169,29 +1199,56 @@ class SearchEngine:
             url = "https://api.core.ac.uk/v3/search/works"
             params = {"q": query, "limit": str(min(num_results, 20)), "offset": "0"}
             headers = {
-                "User-Agent": "FuckenSearch/2.0 (research tool)",
+                "User-Agent": "RootSearch/2.0 (research tool)",
                 "Accept": "application/json",
             }
             data = await self._fetch(url, headers=headers, params=params,
-                                     timeout=12.0, json_mode=True)
-            if not data:
-                return results
-            for item in data.get("results", [])[:num_results]:
-                title = item.get("title", "")
-                href = item.get("downloadUrl", "") or item.get("sourceFulltextUrls", [None])[0]
-                if not title or not href:
-                    continue
-                results.append(SearchResult(
-                    title=title,
-                    url=href,
-                    snippet=(item.get("abstract") or "")[:250],
-                    source="core",
-                    content_type="academic",
-                    relevance_score=0.82,
-                ))
+                                     timeout=8.0, json_mode=True)
+            if data and isinstance(data, dict):
+                for item in data.get("results", [])[:num_results]:
+                    title = item.get("title", "")
+                    href = item.get("downloadUrl", "") or (item.get("sourceFulltextUrls", [None])[0] if item.get("sourceFulltextUrls") else "")
+                    if not title or not href:
+                        continue
+                    results.append(SearchResult(
+                        title=title,
+                        url=href,
+                        snippet=(item.get("abstract") or "")[:250],
+                        source="core",
+                        content_type="academic",
+                        relevance_score=0.82,
+                    ))
+            
+            # Fallback to PLOS Open Access API if CORE v3 API requires auth key
+            if not results:
+                plos_url = "https://api.plos.org/search"
+                plos_params = {
+                    "q": f"title:{query} OR abstract:{query}",
+                    "rows": str(num_results),
+                    "fl": "id,title_display,abstract,journal",
+                    "wt": "json",
+                }
+                plos_data = await self._fetch(plos_url, params=plos_params, timeout=10.0, json_mode=True)
+                if plos_data and isinstance(plos_data, dict):
+                    docs = plos_data.get("response", {}).get("docs", [])
+                    for doc in docs[:num_results]:
+                        doc_id = doc.get("id", "")
+                        title = doc.get("title_display", "")
+                        abstracts = doc.get("abstract", [])
+                        snippet = abstracts[0] if isinstance(abstracts, list) and abstracts else str(abstracts)
+                        if title and doc_id:
+                            results.append(SearchResult(
+                                title=title,
+                                url=f"https://journals.plos.org/plosone/article?id={doc_id}",
+                                snippet=snippet[:250],
+                                source="core",
+                                content_type="academic",
+                                relevance_score=0.85,
+                            ))
         except Exception:
             pass
         return results
+
 
     # ── 20. Internet Archive (Wayback search) ─────────────────
     async def search_internet_archive(self, query: str, num_results: int = None) -> List[SearchResult]:
@@ -1235,12 +1292,11 @@ class SearchEngine:
 
     # ── 21. Semantic Scholar (public feed) + OpenAlex combo ──────
     async def search_jina(self, query: str, num_results: int = None) -> List[SearchResult]:
-        """CORE Open Access Search — replaces Jina (requires API key). 300M+ open-access docs."""
+        """CORE / OpenAccess Academic Search with PLOS fallback."""
         if num_results is None:
             num_results = min(config.results_per_engine, 10)
         results: List[SearchResult] = []
         try:
-            # Use CORE Open Access API v3 (no key required for basic)
             url = "https://api.core.ac.uk/v3/search/works"
             params = {
                 "q": query,
@@ -1249,52 +1305,70 @@ class SearchEngine:
                 "fields": "id,title,abstract,downloadUrl,sourceFulltextUrls,authors,yearPublished",
             }
             headers = {
-                "User-Agent": "FuckenSearch/2.0 (mohamedahmedmatany@gmail.com; research tool)",
+                "User-Agent": "RootSearch/2.0 (mohamedahmedmatany@gmail.com; research tool)",
                 "Accept": "application/json",
             }
             data = await self._fetch(url, headers=headers, params=params,
-                                     timeout=10.0, json_mode=True, retries=1)
-            if not data:
-                return results
-            for item in data.get("results", [])[:num_results]:
-                title = item.get("title", "")
-                href = item.get("downloadUrl", "")
-                if not href:
-                    src_urls = item.get("sourceFulltextUrls") or []
-                    href = src_urls[0] if src_urls else ""
-                if not title or not href:
-                    continue
-                abstract = (item.get("abstract") or "")[:250]
-                year = item.get("yearPublished", "")
-                results.append(SearchResult(
-                    title=title,
-                    url=href,
-                    snippet=f"{year} — {abstract}" if year else abstract,
-                    source="core_open",
-                    content_type="academic",
-                    relevance_score=0.83,
-                ))
+                                     timeout=8.0, json_mode=True, retries=1)
+            if data and isinstance(data, dict):
+                for item in data.get("results", [])[:num_results]:
+                    title = item.get("title", "")
+                    href = item.get("downloadUrl", "")
+                    if not href:
+                        src_urls = item.get("sourceFulltextUrls") or []
+                        href = src_urls[0] if src_urls else ""
+                    if not title or not href:
+                        continue
+                    abstract = (item.get("abstract") or "")[:250]
+                    year = item.get("yearPublished", "")
+                    results.append(SearchResult(
+                        title=title,
+                        url=href,
+                        snippet=f"{year} — {abstract}" if year else abstract,
+                        source="jina",
+                        content_type="academic",
+                        relevance_score=0.83,
+                    ))
+
+            # Fallback to OpenAlex if CORE API is unreachable
+            if not results:
+                alex_url = "https://api.openalex.org/works"
+                alex_params = {"search": query, "per-page": str(num_results)}
+                alex_data = await self._fetch(alex_url, params=alex_params, timeout=8.0, json_mode=True)
+                if alex_data and isinstance(alex_data, dict):
+                    for item in alex_data.get("results", [])[:num_results]:
+                        title = item.get("display_name", "")
+                        href = item.get("doi", "") or item.get("id", "")
+                        if title and href:
+                            results.append(SearchResult(
+                                title=title,
+                                url=href,
+                                snippet=title,
+                                source="jina",
+                                content_type="academic",
+                                relevance_score=0.82,
+                            ))
         except Exception:
             pass
         return results
 
+
     # ── 22. BASE — Bielefeld Academic Search Engine (replaces Ecosia) ─
     async def search_ecosia(self, query: str, num_results: int = None) -> List[SearchResult]:
-        """BASE (Bielefeld Academic Search Engine) — replaces Ecosia (JS firewall). 300M+ docs, free."""
+        """PLOS (Public Library of Science) — replaces Ecosia/BASE. Free, keyless academic search."""
         if num_results is None:
             num_results = min(config.results_per_engine, 10)
         results: List[SearchResult] = []
         try:
-            url = "https://api.base-search.net/cgi-bin/BaseHttpSearchInterface.fcgi"
+            url = "http://api.plos.org/search"
             params = {
-                "func": "PerformSearch",
-                "query": query,
-                "hits": str(min(num_results, 20)),
-                "offset": "0",
-                "format": "json",
+                "q": query,
+                "wt": "json",
+                "fl": "id,title,abstract,author",
+                "rows": str(min(num_results, 20)),
             }
             headers = {
-                "User-Agent": "FuckenSearch/2.0 (mohamedahmedmatany@gmail.com; research tool)",
+                "User-Agent": self._get_next_user_agent(),
                 "Accept": "application/json",
             }
             data = await self._fetch(url, headers=headers, params=params,
@@ -1303,19 +1377,18 @@ class SearchEngine:
                 return results
             docs = data.get("response", {}).get("docs", [])
             for doc in docs[:num_results]:
-                title = doc.get("dctitle", ["" ])
-                title = title[0] if isinstance(title, list) else title
-                href = doc.get("dcidentifier", [""])
-                href = href[0] if isinstance(href, list) else href
-                abstract = doc.get("dcdescription", [""])
-                abstract = abstract[0] if isinstance(abstract, list) else abstract
-                if not title or not href or not href.startswith("http"):
+                title = doc.get("title", "")
+                doi = doc.get("id", "")
+                if not title or not doi:
                     continue
+                abstract = doc.get("abstract", [""])
+                abstract_val = abstract[0] if isinstance(abstract, list) and abstract else (abstract or "")
+                abstract_val = abstract_val.strip()
                 results.append(SearchResult(
                     title=title,
-                    url=href,
-                    snippet=(abstract or "")[:250],
-                    source="base_search",
+                    url=f"https://doi.org/{doi}",
+                    snippet=abstract_val[:250],
+                    source="plos",
                     content_type="academic",
                     relevance_score=0.80,
                 ))
@@ -1444,6 +1517,12 @@ class SearchEngine:
         # (engine_methods/select_engines), shared with the web streaming pipeline.
         search_methods = self.engine_methods()
         engines_to_use = list(self.select_engines(query).keys())
+        
+        # Ensure representative engines for each category are included to populate all categories
+        additional_engines = ["reddit", "stackexchange", "arxiv", "openlibrary", "jina", "ecosia", "qwant"]
+        for eng in additional_engines:
+            if eng in search_methods and eng not in engines_to_use:
+                engines_to_use.append(eng)
 
         # Timeout depends on model
         timeout_val = 20.0 if model == "fathom_max" else 10.0
@@ -1513,5 +1592,4 @@ class SearchEngine:
 
     async def close(self):
         """إغلاق الجلسة"""
-        if self.session and not self.session.closed:
-            await self.session.close()
+        self.session = None

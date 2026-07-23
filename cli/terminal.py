@@ -1,5 +1,5 @@
 """
-Fucken Search - Beautiful Interactive Terminal interface
+RootSearch - Beautiful Interactive Terminal interface
 واجهة الطرفية التفاعلية الخارقة لمحرك البحث
 """
 
@@ -14,7 +14,7 @@ from typing import List, Dict, Any, Optional
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from config import config
-from main import FuckenSearch
+from main import RootSearch
 
 # أكواد الألوان لتهيئة الطرفية الملونة
 CLR_RESET = "\033[0m"
@@ -71,7 +71,7 @@ def print_banner():
 {color_text("██║░░░░░██║░░░░░░╚█████╔╝██║░░██║╚█████╔╝██║░░██║", CLR_CYAN, bold=True)}
 {color_text("╚═╝░░░░░╚═╝░░░░░░░╚════╝░╚═╝░░╚═╝░╚════╝░╚═╝░░╚═╝", CLR_CYAN, bold=True)}
 
-          🔥 {color_text("FUCKEN SEARCH", CLR_RED, bold=True)} - {color_text("محرك البحث الخارق", CLR_YELLOW, bold=True)} 🔥
+          🔥 {color_text("ROOTSEARCH", CLR_RED, bold=True)} - {color_text("محرك البحث الخارق", CLR_YELLOW, bold=True)} 🔥
           ⚡ {color_text("البحث التحليلي العميق في خبايا الإنترنت", CLR_GREEN)} ⚡
           💀 {color_text("Without paid APIs - Pure Python Power", CLR_GRAY, bold=True)} 💀
     =============================================================
@@ -272,7 +272,7 @@ def export_results_file(report: Dict[str, Any]):
     timestamp = report.get('timestamp', 'export').replace(':', '-').replace('.', '-')[:19]
     
     if choice == '1':
-        filename = f"fuckensearch_{query_safe}_{timestamp}.json"
+        filename = f"rootsearch_{query_safe}_{timestamp}.json"
         try:
             with open(filename, 'w', encoding='utf-8') as f:
                 json.dump(report, f, ensure_ascii=False, indent=4)
@@ -281,11 +281,11 @@ def export_results_file(report: Dict[str, Any]):
             print(color_text(f"\n[❌] فشل التصدير: {e}", CLR_RED))
             
     elif choice == '2':
-        filename = f"fuckensearch_{query_safe}_{timestamp}.txt"
+        filename = f"rootsearch_{query_safe}_{timestamp}.txt"
         try:
             with open(filename, 'w', encoding='utf-8') as f:
                 f.write(f"=============================================================\n")
-                f.write(f"           FUCKEN SEARCH REPORT - تقرير بحث خارق             \n")
+                f.write(f"           ROOTSEARCH REPORT - تقرير بحث خارق             \n")
                 f.write(f"=============================================================\n")
                 f.write(f"الاستعلام: {report.get('query')}\n")
                 f.write(f"التاريخ: {report.get('timestamp')}\n")
@@ -352,7 +352,7 @@ async def run_cli_interactive():
     """تشغيل الواجهة التفاعلية الرئيسية للطرفية"""
     print_banner()
     
-    engine = FuckenSearch()
+    engine = RootSearch()
     try:
         while True:
             query = input(f"\n🔍 {color_text('أدخل موضوع البحث (أو اكتب exit للخروج): ', CLR_WHITE, bold=True)}").strip()
@@ -394,7 +394,7 @@ async def run_cli_interactive():
 
 async def run_direct_cli_search(query: str, deep: bool = True):
     """تشغيل بحث مباشر سريع بدون الحلقة التفاعلية"""
-    engine = FuckenSearch()
+    engine = RootSearch()
     try:
         msg = f"جاري البحث المباشر عن: '{query}'"
         report = await run_with_spinner(engine.deep_search(query, deep_analysis=deep), msg)

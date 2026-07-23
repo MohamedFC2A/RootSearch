@@ -14,17 +14,21 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from config import config
 from core.analyzer import AIAnalyzer
 from core.search_engine import SearchResult
-from core.aggregator import ResultAggregator
+from core.net import close_global_sessions
 
 
 class TestFathomUpgrades(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.analyzer = AIAnalyzer()
 
+    async def asyncTearDown(self):
+        await close_global_sessions()
+
+
     def test_config_values(self):
         """Verify the Fathom S1/Max limits are correctly added to config."""
-        self.assertEqual(config.fathom_s1_max_sources, 35)
-        self.assertEqual(config.fathom_max_nodes, 150)
+        self.assertEqual(config.fathom_s1_max_sources, 200)
+        self.assertEqual(config.fathom_max_nodes, 600)
         self.assertEqual(config.fathom_max_depth, 4)
         self.assertEqual(config.fathom_max_concurrency, 12)
         self.assertEqual(config.results_per_engine, 40)

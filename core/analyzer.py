@@ -1,5 +1,5 @@
 """
-Fucken Search - AI Analysis Module
+RootSearch - AI Analysis Module
 محلل الذكاء الاصطناعي الخارق: يحلل، يلخص، ويستخرج المعلومات
 """
 
@@ -15,31 +15,8 @@ from datetime import datetime
 from config import config
 from core.search_engine import SearchResult
 
-# ─────────────────────────────────────────────────────────────
-#  GLOBAL SHARED CONNECTION POOL FOR DEEPSEEK
-# ─────────────────────────────────────────────────────────────
-_session_lock = asyncio.Lock()
-_global_session: Optional[aiohttp.ClientSession] = None
-
-async def _get_global_session() -> aiohttp.ClientSession:
-    """إرجاع جلسة اتصال HTTP مشتركة ومستقرة لإعادة استخدام اتصالات TCP"""
-    global _global_session
-    if _global_session is None or _global_session.closed:
-        async with _session_lock:
-            if _global_session is None or _global_session.closed:
-                # حد أقصى للاتصالات المتزامنة 100 مع كاش DNS طويل
-                connector = aiohttp.TCPConnector(limit=100, ttl_dns_cache=300)
-                _global_session = aiohttp.ClientSession(connector=connector)
-    return _global_session
-
-async def close_global_session():
-    """إغلاق الجلسة المشتركة بشكل نظيف عند إيقاف السيرفر"""
-    global _global_session
-    if _global_session is not None and not _global_session.closed:
-        async with _session_lock:
-            if _global_session is not None and not _global_session.closed:
-                await _global_session.close()
-                _global_session = None
+from core.net import get_analyzer_session as _get_global_session
+from core.net import close_global_sessions as close_global_session
 
 
 _llm_semaphore = None
@@ -85,35 +62,7 @@ class AIAnalyzer:
 
     async def _call_llm(self, prompt: str) -> Optional[str]:
         """استدعاء DeepSeek كنموذج أساسي وحيد للتحليل والتلخيص"""
-        # 1. محاولة استخدام GLM Colab أولاً إذا تم اختياره وتوفر الرابط
-        if config.llm_provider == "glm_colab" and config.glm_api_url:
-            try:
-                url = f"{config.glm_api_url.rstrip('/')}/v1/chat/completions"
-                headers = {"Content-Type": "application/json"}
-                if config.glm_api_key:
-                    headers["Authorization"] = f"Bearer {config.glm_api_key}"
-                
-                payload = {
-                    "model": "glm-4-9b-chat",
-                    "messages": [{"role": "user", "content": prompt}],
-                    "temperature": 0.3,
-                }
-                
-                session = await _get_global_session()
-                async with session.post(url, json=payload, headers=headers, timeout=30) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        content = data["choices"][0]["message"]["content"]
-                        if content:
-                            return content.strip()
-                    else:
-                        print(f"[⚠️] فشل الاتصال بخادم GLM Colab: رمز الحالة {response.status}")
-            except Exception as e:
-                print(f"[⚠️] خطأ أثناء الاتصال بـ GLM Colab: {e}")
-            
-            print("[ℹ/⚠️] محاولة الرجوع التلقائي إلى DeepSeek...")
-
-        # 2. الاستدعاء الأساسي لـ DeepSeek
+        # الاستدعاء المباشر والوحيد لـ DeepSeek
         if config.deepseek_api_key:
             return await self._call_deepseek(prompt)
         
@@ -675,7 +624,35 @@ class AIAnalyzer:
           - 'confidence': float 0-1
         """
         if not top_results:
-            return {'answer': '', 'sources': [], 'verified': k_trusted, 'confidence': 0.0}
+            # Generate answer directly using LLM without source context
+            prompt = f"""أنت محرك إجابات مرجعية فورية مع التفكير التحليلي العميق. مهمتك: قدّم الإجابة المباشرة والصحيحة لاستعلام المستخدم بناءً على معرفتك العامة والمدربة.
+            
+[هام جداً] يجب أن تبدأ إجابتك بكتابة سلسلة التفكير والتحليل الداخلي بالكامل باللغة العربية داخل وسم التفكير <think>...</think>، ثم تتبعها بالإجابة المباشرة النهائية للمستخدم بعد إغلاق الوسم.
+
+الاستعلام: {query}
+خطوات التفكير والإجابة المرجعية:"""
+            try:
+                if not self.nlp_initialized:
+                    await self.initialize()
+                answer_text = await self._call_llm(prompt)
+                if answer_text:
+                    answer_text, thinking = self._extract_thinking_and_response(answer_text)
+                    return {
+                        'answer': answer_text.strip(),
+                        'thinking': thinking,
+                        'sources': [],
+                        'verified': False,
+                        'confidence': 0.5,
+                    }
+            except Exception as e:
+                print(f"[!] direct answer generation without sources failed: {e}")
+            return {
+                'answer': 'عذراً، لم نتمكن من العثور على مصادر كافية للإجابة على هذا الاستعلام حالياً، يرجى إعادة محاولة صياغة الاستعلام.',
+                'thinking': '',
+                'sources': [],
+                'verified': False,
+                'confidence': 0.0
+            }
 
         # Build a compact source block for the prompt (title + domain + snippet)
         from urllib.parse import urlparse
@@ -715,8 +692,8 @@ class AIAnalyzer:
 2. بعد إغلاق وسم </think>: اكتب الإجابة المباشرة والدقيقة والنهائية للمستخدم.
 3. الإجابة النهائية يجب أن تبدأ بالحقيقة فوراً، بدون مقدمات ولا حشو، والحد الأقصى 5 جمل موجزة.
 4. اذكر الأرقام والحقائق الدقيقة بوحداتها الصحيحة دائماً.
-5. إذا كانت الإجابة غير موجودة في المصادر، قل: "لا تتوفر بيانات موثوقة كافية للإجابة على هذا الاستعلام."
-6. لا تخترع ولا تستنتج ولا تضيف معلومات خارج المصادر المقدمة.{verification_clause}
+5. إذا لم تجد الإجابة بشكل كامل في المصادر المقدمة، فاستخدم معرفتك العامة والمدربة لتزويد المستخدم بإجابة غنية وصحيحة ومفيدة تخدم غرض سؤاله، ولا ترفض الإجابة أبداً.
+6. رتب أفكارك وأعط الأولوية لمعلومات المصادر، ولكن في حال نقصها، استعن بذكائك العام وخبرتك لحل استفسار المستخدم بنجاح ودون أي تردد.{verification_clause}
 
 الاستعلام: {query}
 {cross_match_block}
@@ -747,17 +724,17 @@ class AIAnalyzer:
         # Fallback: best snippet from top result
         if top_results:
             r = top_results[0]
-            snip = (getattr(r, 'snippet', '') or '')[:350]
+            snip = (getattr(r, 'snippet', '') or getattr(r, 'content', '') or '')[:350]
             from urllib.parse import urlparse
             domain = urlparse(getattr(r, 'url', '')).netloc or getattr(r, 'source', '')
             return {
-                'answer': snip or 'لا تتوفر بيانات موثوقة كافية للإجابة على هذا الاستعلام.',
+                'answer': snip or f'الإجابة المباشرة عن الاستعلام: {query}. لمزيد من التفاصيل يرجى الرجوع للمصدر.',
                 'thinking': '',
                 'sources': cited_sources[:3],
                 'verified': False,
                 'confidence': 0.3,
             }
-        return {'answer': '', 'thinking': '', 'sources': [], 'verified': False, 'confidence': 0.0}
+        return {'answer': f'الإجابة المباشرة عن الاستعلام: {query}. يرجى مراجعة المصادر أدناه.', 'thinking': '', 'sources': [], 'verified': False, 'confidence': 0.0}
 
     async def summarize_text(self, text: str, max_length: int = 300, min_length: int = 50, query: str = "", is_synthesis: bool = False) -> str:
         """تلخيص النص باستخدام AI (مع fallback لتقنية الاستخراج)"""
@@ -1000,6 +977,15 @@ Webpage content to process:
                                    model: str = "fathom_s1",
                                    k_trusted: bool = False) -> Dict[str, Any]:
         """توليد تقرير شامل ومجمع عن نتائج البحث"""
+        from core.cognitive import SmartSourceFilter
+        ssf = SmartSourceFilter()
+        filtered_pairs = []
+        for r, a in zip(results, analyses):
+            validated = ssf.filter_and_validate([r], query, k_trusted=k_trusted)
+            if validated:
+                filtered_pairs.append((validated[0], a))
+        results = [p[0] for p in filtered_pairs]
+        analyses = [p[1] for p in filtered_pairs]
         
         # تجميع كل المحتوى
         max_report_sources = 100 if model == "fathom_max" else 30
@@ -1139,7 +1125,7 @@ Webpage content to process:
         report['summary'] = 'لا يوجد محتوى كافٍ للتلخيص.'
         report['executive_summary'] = 'لا يوجد محتوى كافٍ للتلخيص.'
         report['deep_analysis'] = 'لا يوجد محتوى كافٍ للتحليل.'
-        report['fuckenbase_analysis'] = 'لا يوجد محتوى كافٍ للتحليل.'
+        report['rootbase_analysis'] = 'لا يوجد محتوى كافٍ للتحليل.'
         
         # إضافة تلخيص شامل والتحليل المعرفي العميق
         if all_content:
@@ -1268,7 +1254,7 @@ Ensure professional markdown formatting, using empty lines between paragraphs to
                     if deep_analysis_text:
                         deep_analysis_text, thinking = self._extract_thinking_and_response(deep_analysis_text)
                         report['deep_analysis'] = deep_analysis_text
-                        report['fuckenbase_analysis'] = deep_analysis_text
+                        report['rootbase_analysis'] = deep_analysis_text
                         report['thinking'] = thinking
                 except Exception as e:
                     print(f"[!] فشل إنشاء التحليل العميق بواسطة الـ AI: {e}")
@@ -1278,7 +1264,7 @@ Ensure professional markdown formatting, using empty lines between paragraphs to
                     f"**[{i+1}] {r.title}** (الدرجة: {r.relevance_score})\n\n{r.snippet}" for i, r in enumerate(results[:5])
                 ])
                 report['deep_analysis'] = fallback_deep
-                report['fuckenbase_analysis'] = fallback_deep
+                report['rootbase_analysis'] = fallback_deep
         
         # ─── الإجابة المرجعية المباشرة (RootSearch AI Direct Answer) ───
         report['direct_answer'] = {'answer': '', 'sources': [], 'verified': k_trusted, 'confidence': 0.0}
@@ -1452,7 +1438,8 @@ Ensure professional markdown formatting, using empty lines between paragraphs to
         # Fallback: heuristics based on query language
         words = [w for w in re.findall(r"\w+", query) if len(w) > 2]
         if not words:
-            return []
+            return [query]
+
             
         # Check if Arabic
         is_arabic = bool(re.search(r"[\u0600-\u06FF]", query))
@@ -1532,4 +1519,80 @@ Ensure professional markdown formatting, using empty lines between paragraphs to
         except Exception as e:
             print(f"[⚠️] Failed to classify query intent using AI: {e}")
         return None
+
+    async def filter_sources_ai(self, query: str, results: List[SearchResult], max_seeds: int = 15) -> List[SearchResult]:
+        """
+        تقييم وتصفية مصادر البحث باستخدام الذكاء الاصطناعي (DeepSeek) قبل عملية الجلب والتسليق.
+        يضمن هذا الفحص استبعاد المصادر العشوائية والمخالفة لنية الاستعلام.
+        """
+        if not results or not config.use_ai_analysis or not config.deepseek_api_key:
+            return results
+
+        await self.initialize()
+
+        # Take the top 30 candidates for LLM evaluation (pre-filter to avoid token bloat)
+        candidates = results[:30]
+        
+        # Prepare evaluation data
+        eval_data = []
+        for idx, r in enumerate(candidates):
+            eval_data.append({
+                "index": idx,
+                "url": r.url,
+                "title": r.title,
+                "snippet": r.snippet[:200]
+            })
+
+        prompt = (
+            f"You are the Core Source Auditor for RootSearch.\n"
+            f"User Query: '{query}'\n\n"
+            f"Your job is to analyze the following candidate search results and select the most relevant, reliable, and authoritative URLs that directly and accurately address the user query.\n"
+            f"Discard low-quality blogs, spam, ad-heavy directories, or off-topic websites.\n\n"
+            f"Candidate Results:\n{json.dumps(eval_data, ensure_ascii=False, indent=2)}\n\n"
+            f"STRICT RULES:\n"
+            f"1. Select up to {max_seeds} results.\n"
+            f"2. Return ONLY a JSON list of integers representing the 'index' of the selected results, ordered from best to worst, e.g.: [2, 0, 5, 11].\n"
+            f"3. Do not include any explanation, code blocks, or markdown formatting."
+        )
+
+        try:
+            response_text = await self._call_llm(prompt)
+            if response_text:
+                response_text = response_text.strip()
+                if response_text.startswith("```"):
+                    response_text = re.sub(r"^```(?:json)?\n|\n```$", "", response_text, flags=re.MULTILINE).strip()
+                
+                # Robust extraction of JSON array
+                match = re.search(r'\[\s*\d+\s*(?:,\s*\d+\s*)*\]', response_text, re.DOTALL)
+                if match:
+                    json_str = match.group(0)
+                else:
+                    json_str = response_text
+                
+                selected_indices = json.loads(json_str)
+                if isinstance(selected_indices, list):
+                    filtered_results = []
+                    seen_urls = set()
+                    for idx in selected_indices:
+                        if isinstance(idx, int) and 0 <= idx < len(candidates):
+                            r = candidates[idx]
+                            if r.url not in seen_urls:
+                                if not r.metadata:
+                                    r.metadata = {}
+                                r.metadata["ai_approved"] = True
+                                r.relevance_score = 0.95
+                                filtered_results.append(r)
+                                seen_urls.add(r.url)
+                    
+                    # If we got valid filtered results, append the remaining original results (ranked below the chosen ones)
+                    # to make sure we don't drop sources if max_seeds is exceeded.
+                    for r in results:
+                        if r.url not in seen_urls:
+                            filtered_results.append(r)
+                            
+                    return filtered_results
+        except Exception as e:
+            print(f"[⚠️] AI source filtering failed: {e}. Falling back to default scoring.")
+        
+        return results
 

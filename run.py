@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Fucken Search - Run Script
+RootSearch - Run Script
 مشغل التطبيق: CLI, Web, or Direct Search
 """
 
@@ -12,7 +12,7 @@ import asyncio
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from cli.terminal import main as cli_main
-from main import FuckenSearch
+from main import RootSearch
 
 
 def print_banner():
@@ -32,7 +32,7 @@ def print_banner():
 ██║░░░░░██║░░░░░░╚█████╔╝██║░░██║╚█████╔╝██║░░██║
 ╚═╝░░░░░╚═╝░░░░░░░╚════╝░╚═╝░░╚═╝░╚════╝░╚═╝░░╚═╝
 
-    🔥 FUCKEN SEARCH - Deep Search Engine 🔥
+    🔥 ROOTSEARCH - Deep Search Engine 🔥
     ⚡ البحث الخارق في أعماق الإنترنت ⚡
     💀 Without paid APIs - Pure Python Power 💀
     
@@ -70,7 +70,7 @@ def main():
         asyncio.run(run_direct(query))
     
     elif mode in ["--help", "-h", "help"]:
-        print("\n📖 Fucken Search - المساعدة")
+        print("\n📖 RootSearch - المساعدة")
         print("=" * 40)
         print("python run.py cli              # واجهة تفاعلية")
         print("python run.py web              # خادم ويب")
@@ -85,7 +85,7 @@ def main():
 
 async def run_direct(query: str):
     """تشغيل بحث مباشر"""
-    engine = FuckenSearch()
+    engine = RootSearch()
     try:
         import json
         report = await engine.deep_search(query)

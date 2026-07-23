@@ -1,6 +1,6 @@
 @echo off
 title RootSearch Backend Launcher
-cd /d "c:\Best Projects\FuckenSearch"
+cd /d "c:\Best Projects\RootSearch"
 
 echo ===================================================
 echo   RootSearch Backend & Cloudflare Tunnel Launcher

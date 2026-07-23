@@ -1,5 +1,5 @@
 """
-Fucken Search - Query Intent Classifier
+RootSearch - Query Intent Classifier
 مُصنِّف نية الاستعلام: طبقة خفيفة قائمة على القواعد (< 1ms، بدون تبعيات خارجية)
 تُوحّد اختيار المصادر عبر search_all و web/app.py وتمنع تلوث النتائج بمصادر
 غير متعلقة (خصوصاً قواعد الأبحاث الأكاديمية للاستعلامات العامة).

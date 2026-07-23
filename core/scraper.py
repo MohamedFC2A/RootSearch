@@ -30,7 +30,7 @@ except Exception:
     _ua_pool = None
 
 from config import config, proxy_config
-from core.net import SafeResolver
+from core.net import SafeResolver, get_global_session
 from core.search_engine import SearchResult
 
 
@@ -53,6 +53,141 @@ def _backoff_delay(attempt: int, base: float = 1.0, cap: float = 30.0) -> float:
     """
     ceiling = min(cap, base * (2 ** attempt))
     return random.uniform(0, ceiling)
+
+
+# ─────────────────────────────────────────────
+#  PARALLEL PROCESS POOL FOR CPU-BOUND HTML PARSING
+# ─────────────────────────────────────────────
+
+from concurrent.futures import ProcessPoolExecutor
+import multiprocessing
+
+_PROCESS_POOL: Optional[ProcessPoolExecutor] = None
+
+def _get_process_pool() -> ProcessPoolExecutor:
+    global _PROCESS_POOL
+    if _PROCESS_POOL is None:
+        # Use number of CPU cores to maximize CPU usage
+        cores = max(1, multiprocessing.cpu_count())
+        _PROCESS_POOL = ProcessPoolExecutor(max_workers=cores)
+    return _PROCESS_POOL
+
+def extract_content_trafilatura(html: str, url: str) -> Dict[str, Any]:
+    """Primary extractor — trafilatura (highest quality)."""
+    try:
+        result = trafilatura.extract(
+            html,
+            url=url,
+            include_comments=False,
+            include_tables=True,
+            include_images=False,
+            include_links=False,
+            output_format="json",
+            with_metadata=True,
+            max_tree_size=1_000_000,
+            favor_precision=True,
+        )
+        if result:
+            data = json.loads(result)
+            return {
+                "title": data.get("title", ""),
+                "content": data.get("raw_text", ""),
+                "author": data.get("author", ""),
+                "date": data.get("date", ""),
+                "description": data.get("description", ""),
+                "site_name": data.get("sitename", ""),
+                "categories": data.get("categories", []),
+                "tags": data.get("tags", []),
+                "extraction_method": "trafilatura",
+            }
+    except Exception:
+        pass
+    return {}
+
+def extract_content_bs4(html: str, url: str) -> Dict[str, Any]:
+    """Fallback extractor — BeautifulSoup."""
+    try:
+        soup = BeautifulSoup(html, "html.parser")
+        for el in soup(["script", "style", "nav", "header", "footer",
+                        "iframe", "noscript", "svg", "form", "aside"]):
+            el.decompose()
+
+        title = soup.title.get_text(strip=True) if soup.title else ""
+
+        description = ""
+        m = soup.find("meta", attrs={"name": "description"}) or \
+            soup.find("meta", attrs={"property": "og:description"})
+        if m:
+            description = m.get("content", "")
+
+        content_parts: List[str] = []
+        selectors = [
+            "article", "main", '[role="main"]', ".post-content",
+            ".article-content", ".entry-content", "#content", ".content",
+            ".post", ".article", ".story-body", "[itemprop='articleBody']",
+        ]
+        for sel in selectors:
+            try:
+                node = soup.select_one(sel)
+                if node:
+                    for tag in node.find_all(
+                            ["p", "h1", "h2", "h3", "h4", "h5", "h6",
+                             "li", "td", "th", "blockquote", "pre", "code"]):
+                        t = tag.get_text(strip=True)
+                        if t and len(t) > 20:
+                            content_parts.append(t)
+                    if content_parts:
+                        break
+            except Exception:
+                continue
+
+        if not content_parts:
+            for p in soup.find_all(["p", "h1", "h2", "h3", "h4", "h5", "h6"]):
+                t = p.get_text(strip=True)
+                if t and len(t) > 30:
+                    content_parts.append(t)
+
+        content = "\n\n".join(content_parts)
+        content = re.sub(r"\s+", " ", content)
+        content = re.sub(r"\n{3,}", "\n\n", content)
+
+        keywords: List[str] = []
+        mk = soup.find("meta", attrs={"name": "keywords"})
+        if mk:
+            keywords = [k.strip() for k in mk.get("content", "").split(",") if k.strip()]
+
+        return {
+            "title": title,
+            "content": content.strip()[:100_000],
+            "description": description,
+            "keywords": keywords,
+            "extraction_method": "bs4",
+        }
+    except Exception as exc:
+        return {"title": "", "content": "", "error": str(exc)}
+
+def extract_page_details(html: str, url: str) -> Dict[str, Any]:
+    """Combines content extraction and link extraction to execute cleanly in a ProcessPool."""
+    # 1. Content & metadata extraction
+    extracted = extract_content_trafilatura(html, url)
+    if not extracted or not extracted.get("content"):
+        extracted = extract_content_bs4(html, url)
+        
+    # 2. Link extraction
+    links = []
+    try:
+        soup = BeautifulSoup(html, "html.parser")
+        for a in soup.find_all("a", href=True):
+            full = urljoin(url, a["href"])
+            p = urlparse(full)
+            if (p.scheme in ("http", "https")
+                    and not any(ext in p.path.lower()
+                                for ext in [".jpg", ".png", ".pdf", ".zip", ".mp4", ".gif", ".jpeg", ".svg", ".png", ".webp"])):
+                links.append(full.split('#')[0])
+    except Exception:
+        pass
+    extracted["links"] = list(set(links))
+    return extracted
 
 
 # ─────────────────────────────────────────────
@@ -284,7 +419,7 @@ class DeepScraper:
     def __init__(self, on_event: EventCallback = None):
         self._sessions: Dict[str, aiohttp.ClientSession] = {}   # per-domain
         self._cookie_jars: Dict[str, aiohttp.CookieJar] = {}
-        self.semaphore = asyncio.Semaphore(config.max_concurrent_requests)
+        self.semaphore = asyncio.Semaphore(max(config.max_concurrent_requests, 1000))
         self._on_event = on_event
         self._cb = _circuit_breaker
         self._proxy = _proxy_rotator
@@ -309,27 +444,9 @@ class DeepScraper:
     # ── Session management (per-domain cookie isolation) ──────────
 
     async def _get_session(self, domain: str) -> aiohttp.ClientSession:
-        if domain not in self._sessions or self._sessions[domain].closed:
-            jar = aiohttp.CookieJar(unsafe=True)
-            self._cookie_jars[domain] = jar
-            timeout = aiohttp.ClientTimeout(
-                total=config.request_timeout,
-                connect=10,
-                sock_read=20,
-            )
-            resolver = SafeResolver()
-            conn = aiohttp.TCPConnector(
-                limit=config.max_concurrent_requests,
-                force_close=False,          # keep-alive enabled
-                enable_cleanup_closed=True,
-                resolver=resolver,
-            )
-            self._sessions[domain] = aiohttp.ClientSession(
-                timeout=timeout,
-                connector=conn,
-                cookie_jar=jar,
-            )
-        return self._sessions[domain]
+        session = await get_global_session(domain)
+        self._sessions[domain] = session
+        return session
 
     # ── URL safety guard ─────────────────────────────────────────
 
@@ -412,7 +529,7 @@ class DeepScraper:
         async with self.semaphore:
             session = await self._get_session(domain)
 
-            for attempt in range(4):  # max 4 attempts
+            for attempt in range(2):  # max 2 attempts to minimize total latency
                 proxy = self._proxy.get_proxy() if self._proxy.has_proxies else None
                 # Each attempt rotates a fresh browser identity + referer for non-wiki
                 # domains; only genuine wiki domains use the descriptive bot UA.
@@ -434,6 +551,7 @@ class DeepScraper:
                         "headers": headers,
                         "allow_redirects": True,
                         "ssl": False,
+                        "timeout": aiohttp.ClientTimeout(total=8.0, connect=3.0, sock_read=6.0),
                     }
                     if proxy:
                         kwargs["proxy"] = proxy
@@ -524,7 +642,7 @@ class DeepScraper:
                     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
                     "X-No-Cache": "true"
                 }
-                async with session.get(jina_url, headers=headers, timeout=aiohttp.ClientTimeout(total=8.0)) as resp:
+                async with session.get(jina_url, headers=headers, timeout=aiohttp.ClientTimeout(total=5.0, connect=2.0, sock_read=4.0)) as resp:
                     if resp.status == 200:
                         text_data = await resp.text(errors="replace")
                         if text_data and len(text_data) > 100:
@@ -542,7 +660,7 @@ class DeepScraper:
             # live origin blocks every request, an archived copy is usually reachable.
             try:
                 wb_api = f"https://archive.org/wayback/available?url={url}"
-                async with session.get(wb_api, timeout=aiohttp.ClientTimeout(total=8.0)) as resp:
+                async with session.get(wb_api, timeout=aiohttp.ClientTimeout(total=5.0, connect=2.0, sock_read=4.0)) as resp:
                     if resp.status == 200:
                         data = await resp.json(content_type=None)
                         snap = (data.get("archived_snapshots") or {}).get("closest") or {}
@@ -551,7 +669,7 @@ class DeepScraper:
                             async with session.get(
                                 snap_url,
                                 headers=_build_stealth_headers(url),
-                                timeout=aiohttp.ClientTimeout(total=12.0),
+                                timeout=aiohttp.ClientTimeout(total=8.0, connect=3.0, sock_read=6.0),
                             ) as r2:
                                 if r2.status == 200:
                                     html = await r2.text(errors="replace")
@@ -586,101 +704,12 @@ class DeepScraper:
                 return fallback_snippet
             return None
 
-    # ── Content extraction pipeline ───────────────────────────────
-
+    # ── Content extraction wrappers (backward compatibility for tests) ──
     def extract_content_trafilatura(self, html: str, url: str) -> Dict[str, Any]:
-        """Primary extractor — trafilatura (highest quality)."""
-        try:
-            result = trafilatura.extract(
-                html,
-                url=url,
-                include_comments=False,
-                include_tables=True,
-                include_images=False,
-                include_links=False,
-                output_format="json",
-                with_metadata=True,
-                max_tree_size=1_000_000,
-                favor_precision=True,
-            )
-            if result:
-                data = json.loads(result)
-                return {
-                    "title": data.get("title", ""),
-                    "content": data.get("raw_text", ""),
-                    "author": data.get("author", ""),
-                    "date": data.get("date", ""),
-                    "description": data.get("description", ""),
-                    "site_name": data.get("sitename", ""),
-                    "categories": data.get("categories", []),
-                    "tags": data.get("tags", []),
-                    "extraction_method": "trafilatura",
-                }
-        except Exception:
-            pass
-        return {}
+        return extract_content_trafilatura(html, url)
 
     def extract_content_bs4(self, html: str, url: str) -> Dict[str, Any]:
-        """Fallback extractor — BeautifulSoup."""
-        try:
-            soup = BeautifulSoup(html, "html.parser")
-            for el in soup(["script", "style", "nav", "header", "footer",
-                            "iframe", "noscript", "svg", "form", "aside"]):
-                el.decompose()
-
-            title = soup.title.get_text(strip=True) if soup.title else ""
-
-            description = ""
-            m = soup.find("meta", attrs={"name": "description"}) or \
-                soup.find("meta", attrs={"property": "og:description"})
-            if m:
-                description = m.get("content", "")
-
-            content_parts: List[str] = []
-            selectors = [
-                "article", "main", '[role="main"]', ".post-content",
-                ".article-content", ".entry-content", "#content", ".content",
-                ".post", ".article", ".story-body", "[itemprop='articleBody']",
-            ]
-            for sel in selectors:
-                try:
-                    node = soup.select_one(sel)
-                    if node:
-                        for tag in node.find_all(
-                                ["p", "h1", "h2", "h3", "h4", "h5", "h6",
-                                 "li", "td", "th", "blockquote", "pre", "code"]):
-                            t = tag.get_text(strip=True)
-                            if t and len(t) > 20:
-                                content_parts.append(t)
-                        if content_parts:
-                            break
-                except Exception:
-                    continue
-
-            if not content_parts:
-                for p in soup.find_all(["p", "h1", "h2", "h3", "h4", "h5", "h6"]):
-                    t = p.get_text(strip=True)
-                    if t and len(t) > 30:
-                        content_parts.append(t)
-
-            content = "\n\n".join(content_parts)
-            content = re.sub(r"\s+", " ", content)
-            content = re.sub(r"\n{3,}", "\n\n", content)
-
-            keywords: List[str] = []
-            mk = soup.find("meta", attrs={"name": "keywords"})
-            if mk:
-                keywords = [k.strip() for k in mk.get("content", "").split(",") if k.strip()]
-
-            return {
-                "title": title,
-                "content": content.strip()[:100_000],
-                "description": description,
-                "keywords": keywords,
-                "extraction_method": "bs4",
-            }
-        except Exception as exc:
-            return {"title": "", "content": "", "error": str(exc)}
+        return extract_content_bs4(html, url)
 
     # ── Public API ─────────────────────────────────────────────────
 
@@ -709,10 +738,13 @@ class DeepScraper:
             "label": "Extracting metadata...",
         })
 
-        # Offload CPU-bound text extraction to background threads
-        extracted = await asyncio.to_thread(self.extract_content_trafilatura, html, url)
-        if not extracted.get("content"):
-            extracted = await asyncio.to_thread(self.extract_content_bs4, html, url)
+        # Offload CPU-bound text and link extraction to ProcessPoolExecutor
+        loop = asyncio.get_running_loop()
+        pool = _get_process_pool()
+        try:
+            extracted = await loop.run_in_executor(pool, extract_page_details, html, url)
+        except Exception as exc:
+            extracted = {"title": "", "content": "", "links": [], "error": str(exc)}
 
         if extracted.get("content"):
             extracted["url"] = url
@@ -720,25 +752,6 @@ class DeepScraper:
             extracted["word_count"] = len(extracted["content"].split())
             extracted["scrape_timestamp"] = datetime.now().isoformat()
             extracted["cb_state"] = self._cb.domain_status(domain)
-
-            # Extract links in a background thread
-            def get_links():
-                from bs4 import BeautifulSoup
-                links = []
-                try:
-                    soup = BeautifulSoup(html, "html.parser")
-                    for a in soup.find_all("a", href=True):
-                        full = urljoin(url, a["href"])
-                        p = urlparse(full)
-                        if (p.scheme in ("http", "https")
-                                and not any(ext in p.path.lower()
-                                            for ext in [".jpg", ".png", ".pdf", ".zip", ".mp4", ".gif", ".jpeg", ".svg", ".png", ".webp"])):
-                            links.append(full.split('#')[0])
-                except Exception:
-                    pass
-                return list(set(links))
-
-            extracted["links"] = await asyncio.to_thread(get_links)
 
             extracted["resolved_ip"] = await self._resolve_ip_async(urlparse(url).hostname)
 
@@ -771,9 +784,9 @@ class DeepScraper:
     async def scrape_batch(self, results: List[SearchResult],
                            max_pages: int = 20, k_trusted: bool = False, query: str = "") -> List[SearchResult]:
         """Scrape a ranked list of results in parallel."""
-        if k_trusted:
-            from core.k_trusted import is_domain_authorized
-            results = [r for r in results if is_domain_authorized(r.url, query)]
+        from core.cognitive import SmartSourceFilter
+        ssf = SmartSourceFilter()
+        results = ssf.filter_and_validate(results, query, k_trusted=k_trusted)
         sorted_results = sorted(results, key=lambda r: r.relevance_score, reverse=True)
         to_scrape = sorted_results[:max_pages]
 
@@ -819,9 +832,9 @@ class DeepScraper:
         def get_node_id(u: str) -> str:
             return "n_" + hashlib.md5(u.encode('utf-8')).hexdigest()[:8]
 
-        if k_trusted:
-            from core.k_trusted import is_domain_authorized
-            seeds = [r for r in seeds if is_domain_authorized(r.url, query)]
+        from core.cognitive import SmartSourceFilter
+        ssf = SmartSourceFilter()
+        seeds = ssf.filter_and_validate(seeds, query, k_trusted=k_trusted)
 
         visited_urls = set()
         crawled_results: List[SearchResult] = []
@@ -830,7 +843,7 @@ class DeepScraper:
         queue = asyncio.Queue()
         
         for idx, r in enumerate(seeds):
-            norm = r.url.lower().rstrip('/')
+            norm = ssf.normalize_url(r.url)
             visited_urls.add(norm)
             queued_urls.add(norm)
             # Use the discovery node from metadata if available, else extraction
@@ -912,17 +925,13 @@ class DeepScraper:
 
                     if depth < max_depth and len(crawled_results) < max_nodes:
                         links = scraped.get("links", [])
-                        if k_trusted:
-                            from core.k_trusted import is_domain_authorized
-                            links = [link for link in links if is_domain_authorized(link, query)]
                         random.shuffle(links)
                         enqueued = 0
                         for link in links:
                             if enqueued >= 3:
                                 break
-                            link_norm = link.lower().rstrip('/')
+                            link_norm = ssf.normalize_url(link)
                             if link_norm not in queued_urls:
-                                queued_urls.add(link_norm)
                                 child_res = SearchResult(
                                     title=f"Subpage of {domain}",
                                     url=link,
@@ -931,8 +940,12 @@ class DeepScraper:
                                     relevance_score=res_obj.relevance_score * 0.8
                                 )
                                 child_res.metadata["parent_url"] = url
-                                await queue.put((link, depth + 1, node_id, child_res))
-                                enqueued += 1
+                                # Validate child res using SmartSourceFilter
+                                validated = ssf.filter_and_validate([child_res], query, k_trusted=k_trusted)
+                                if validated:
+                                    queued_urls.add(link_norm)
+                                    await queue.put((link, depth + 1, node_id, validated[0]))
+                                    enqueued += 1
                 else:
                     self._emit("node_status_update", {
                         "nodeId": node_id,
@@ -943,9 +956,12 @@ class DeepScraper:
                 queue.task_done()
 
         tasks = [asyncio.create_task(worker()) for _ in range(concurrency)]
-        await queue.join()
-        for t in tasks:
-            t.cancel()
+        try:
+            await queue.join()
+        finally:
+            for t in tasks:
+                if not t.done():
+                    t.cancel()
 
         return crawled_results
 
@@ -964,22 +980,18 @@ class DeepScraper:
         result["main_page"] = main_content
         result["all_content"] = main_content.get("content", "")
 
-        if max_depth > 1:
-            html = await self.fetch_page(url)
-            if html:
-                soup = BeautifulSoup(html, "html.parser")
-                base_domain = urlparse(url).netloc
-                internal_links: List[str] = []
+        if max_depth > 1 and main_content:
+            base_domain = urlparse(url).netloc
+            internal_links: List[str] = []
 
-                for a in soup.find_all("a", href=True):
-                    full = urljoin(url, a["href"])
-                    p = urlparse(full)
-                    if (p.netloc == base_domain
-                            and p.scheme in ("http", "https")
-                            and not any(ext in p.path.lower()
-                                        for ext in [".jpg", ".png", ".pdf",
-                                                    ".zip", ".mp4", ".gif"])):
-                        internal_links.append(full)
+            for link in main_content.get("links", []):
+                p = urlparse(link)
+                if (p.netloc == base_domain
+                        and p.scheme in ("http", "https")
+                        and not any(ext in p.path.lower()
+                                    for ext in [".jpg", ".png", ".pdf",
+                                                ".zip", ".mp4", ".gif"])):
+                    internal_links.append(link)
 
                 for link in list(set(internal_links))[:5]:
                     c = await self.scrape_url(link)
@@ -990,8 +1002,5 @@ class DeepScraper:
         return result
 
     async def close(self) -> None:
-        """Close all open sessions."""
-        for session in self._sessions.values():
-            if not session.closed:
-                await session.close()
+        """Close sessions reference helper."""
         self._sessions.clear()

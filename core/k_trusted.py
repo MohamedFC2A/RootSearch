@@ -1,5 +1,5 @@
 """
-Fucken Search - K-Trusted Mode Verification Layer
+RootSearch - K-Trusted Mode Verification Layer
 Highly performant filtering, calibration, and translation locking for search results.
 """
 
@@ -19,6 +19,14 @@ def is_domain_authorized(url: str, query: str = "") -> bool:
     """
     if not url:
         return False
+        
+    try:
+        from core.cognitive import SmartSourceFilter
+        ssf = SmartSourceFilter()
+        if ssf.is_spam(url):
+            return False
+    except Exception:
+        pass
         
     parsed = urlparse(url)
     domain = (parsed.netloc or url).lower()
@@ -50,22 +58,33 @@ def is_domain_authorized(url: str, query: str = "") -> bool:
         "intel.com", "techcrunch.com", "wired.com", "cnet.com"
     ]
     
-    # Dynamic additions based on query entities
+    # Dynamic additions based on query entities (normalized for Arabic hamzas & variations)
     query_lower = query.lower() if query else ""
+    if query_lower:
+        query_lower = (
+            query_lower.replace("أ", "ا")
+            .replace("إ", "ا")
+            .replace("آ", "ا")
+            .replace("ة", "ه")
+            .replace("ى", "ي")
+            .replace("ئ", "ي")
+            .replace("ؤ", "و")
+        )
+
     # Sports
-    if any(w in query_lower for w in ["sports", "football", "soccer", "kooora", "كرة القدم", "رياضة", "fifa", "ronaldo", "messi", "لاعب", "لاعبين", "نادي", "tall", "طول", "بطولة", "الدوري", "كأس"]):
+    if any(w in query_lower for w in ["sports", "football", "soccer", "kooora", "كره القدم", "رياضه", "fifa", "ronaldo", "messi", "لاعب", "لاعبين", "نادي", "tall", "طول", "بطوله", "الدوري", "كاس", "كاس العالم", "world cup"]):
         trusted_domains.extend(["fifa.com", "espn.com", "kooora.com", "olympics.com", "laliga.com", "premierleague.com", "sofascore.com", "transfermarkt.com", "goal.com", "foxsports.com", "si.com", "sportsdunia.com", "soccerwiki.org"])
     # Chemistry
-    if any(w in query_lower for w in ["chemistry", "chemical", "molecule", "pubchem", "كيمياء", "جزيء", "تفاعل", "biology", "dna", "protein", "بروتين", "خلية", "جين", "gene"]):
+    if any(w in query_lower for w in ["chemistry", "chemical", "molecule", "pubchem", "كيمياء", "كيميا", "جزيء", "تفاعل", "biology", "dna", "protein", "بروتين", "خليه", "جين", "gene"]):
         trusted_domains.extend(["pubchem.ncbi.nlm.nih.gov", "chembl.git", "acs.org", "rsc.org", "chemspider.com"])
     # Physics
-    if any(w in query_lower for w in ["physics", "quantum", "relativity", "space", "فيزياء", "كموم", "نسبية", "فضاء", "كوكب", "نجم", "star", "planet"]):
+    if any(w in query_lower for w in ["physics", "quantum", "relativity", "space", "فيزياء", "فيزيا", "كموم", "نسبيه", "فضاء", "كوكب", "نجم", "star", "planet"]):
         trusted_domains.extend(["aps.org", "iop.org", "nasa.gov", "space.com", "cern.ch", "esa.int"])
     # Medicine/Biology
-    if any(w in query_lower for w in ["medicine", "disease", "health", "cancer", "طب", "مرض", "صحة", "سرطان", "علاج", "دواء", "مستشفى", "treatment", "drug"]):
+    if any(w in query_lower for w in ["medicine", "disease", "health", "cancer", "طب", "مرض", "صحه", "سرطان", "علاج", "دواء", "مستشفي", "treatment", "drug"]):
         trusted_domains.extend(["who.int", "cdc.gov", "mayoclinic.org", "nih.gov", "fda.gov", "thelancet.com", "nejm.org"])
     # Coding & Tech
-    if any(w in query_lower for w in ["python", "javascript", "code", "programming", "software", "api", "git", "github", "error", "bug", "برمجة", "كود", "مطور", "تطوير"]):
+    if any(w in query_lower for w in ["python", "javascript", "code", "programming", "software", "api", "git", "github", "error", "bug", "برمجه", "كود", "مطور", "تطوير"]):
         trusted_domains.extend(["github.com", "stackoverflow.com", "microsoft.com", "apple.com", "google.com", "developer.mozilla.org", "w3schools.com"])
     # Media & Entertainment
     if any(w in query_lower for w in ["movie", "actor", "film", "series", "imdb", "سينما", "فيلم", "ممثل", "مسلسل"]):
@@ -97,12 +116,23 @@ def is_domain_authorized(url: str, query: str = "") -> bool:
         tier2 = scorer.tier2_domains
         norm_domain = domain[4:] if domain.startswith("www.") else domain
         
-        tier1_sports = {"fifa.com", "olympics.com", "uefa.com", "nba.com", "premierleague.com"}
-        tier1_general = tier1 - tier1_sports
+        # Define sports domains
+        sports_domains = {"fifa.com", "espn.com", "kooora.com", "olympics.com", "laliga.com", "premierleague.com", "sofascore.com", "transfermarkt.com", "goal.com", "foxsports.com", "si.com", "sportsdunia.com", "soccerwiki.org", "uefa.com", "nba.com"}
+        is_sports_query = any(w in query_lower for w in ["sports", "football", "soccer", "kooora", "كره القدم", "رياضه", "fifa", "ronaldo", "messi", "لاعب", "لاعبين", "نادي", "tall", "طول", "بطوله", "الدوري", "كاس", "كاس العالم", "world cup"])
         
-        if norm_domain in tier1_general or any(norm_domain.endswith("." + d) for d in tier1_general):
+        # Enforce sports check
+        if norm_domain in sports_domains or any(norm_domain.endswith("." + sd) for sd in sports_domains):
+            if not is_sports_query:
+                return False
             return True
-        if norm_domain in tier2 or any(norm_domain.endswith("." + d) for d in tier2):
+            
+        # Filter sports domains from generic checks
+        filtered_tier1 = {d for d in tier1 if d not in sports_domains}
+        filtered_tier2 = {d for d in tier2 if d not in sports_domains}
+        
+        if norm_domain in filtered_tier1 or any(norm_domain.endswith("." + d) for d in filtered_tier1):
+            return True
+        if norm_domain in filtered_tier2 or any(norm_domain.endswith("." + d) for d in filtered_tier2):
             return True
     except Exception:
         pass

@@ -1,0 +1,17 @@
+# AI Agent Cursor Rules
+
+Always read `GEMINI.md` first to understand the system architecture, file structure, concurrency limits, and data flow.
+
+## Coding Conventions
+1. **Async-first**: Use async/await for network I/O, database actions, and background tasks.
+2. **Global Connection Pooling**: Reuse sessions from `core/net.py` (`get_global_session` and `get_search_engine_session`). Avoid creating temporary `ClientSession` instances.
+3. **Smart Filtering**: Every source retrieval pipeline must utilize `SmartSourceFilter` from `core/cognitive.py` to normalize URLs and filter spam.
+4. **Fathom Limits**: 
+   - Fathom S1 max sources = 200
+   - Fathom Max max nodes = 600
+5. **Robust Error & Timeout Handling**: Use aggressive timeouts and fallback pipelines (Jina Reader, Wayback Machine) to prevent requests from blocking indefinitely.
+
+## Verification
+Before completing a task, always run tests:
+`python -m unittest discover -s tests`
+Ensure all tests (including the 100 performance tests in `tests/test_performance.py`) pass 100%.

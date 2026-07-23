@@ -1,2 +1,2 @@
-# Fucken Search - Core Module
+# RootSearch - Core Module
 # قلب محرك البحث الخارق

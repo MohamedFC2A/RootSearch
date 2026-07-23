@@ -2,7 +2,7 @@ import asyncio, sys
 sys.path.insert(0, '.')
 from core.search_engine import SearchEngine
 
-async def test():
+async def run_engine_tests():
     engine = SearchEngine()
     try:
         tests = [
@@ -47,5 +47,8 @@ async def test():
                 print(f'  NEEDS FIX: {name}')
     finally:
         await engine.close()
+        from core.net import close_global_sessions
+        await close_global_sessions()
 
-asyncio.run(test())
+asyncio.run(run_engine_tests())
+

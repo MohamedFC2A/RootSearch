@@ -1,5 +1,5 @@
 """
-Fucken Search - Configuration Module v2.0
+RootSearch - Configuration Module v2.0
 الإعدادات العامة لمحرك البحث الخارق — 22+ مصدر مجاني
 """
 
@@ -25,11 +25,11 @@ class SearchConfig:
     request_timeout: int = 30
 
     # أقصى عدد من الصفحات المتزامنة
-    max_concurrent_requests: int = 50
+    max_concurrent_requests: int = 1000
 
     # حدود Fathom المحسنة
-    fathom_s1_max_sources: int = 35
-    fathom_max_nodes: int = 150
+    fathom_s1_max_sources: int = 200
+    fathom_max_nodes: int = 600
     fathom_max_depth: int = 4
     fathom_max_concurrency: int = 12
 
@@ -80,9 +80,7 @@ class SearchConfig:
 
     # ── إعدادات الذكاء الاصطناعي ─────────────────────────────────────
     use_ai_analysis: bool = True
-    llm_provider: str = field(default_factory=lambda: os.getenv("LLM_PROVIDER", "deepseek"))
-    glm_api_url: Optional[str] = field(default_factory=lambda: os.getenv("GLM_API_URL", ""))
-    glm_api_key: Optional[str] = field(default_factory=lambda: os.getenv("GLM_API_KEY", ""))
+    llm_provider: str = "deepseek"
     # ── DeepSeek (OpenAI-compatible API) ──
     deepseek_api_key: Optional[str] = field(default_factory=lambda: os.getenv("DEEPSEEK_API_KEY", ""))
     deepseek_api_url: str = field(default_factory=lambda: os.getenv("DEEPSEEK_API_URL", "https://api.deepseek.com"))

@@ -13,7 +13,7 @@
 ██║░░░░░██║░░░░░╚█████╔╝██║░░██║╚█████╔╝██║░░██║
 ╚═╝░░░░░╚═╝░░░░░░╚════╝░╚═╝░░╚═╝░╚════╝░╚═╝░░╚═╝
 
-Fucken Search - Deep Search Engine
+RootSearch - Deep Search Engine
 محرك البحث الخارق: يبحث في أعماق الإنترنت ويحلل كل شيء
 """
 
@@ -31,7 +31,7 @@ from core.scraper import DeepScraper
 from core.aggregator import ResultAggregator
 
 
-class FuckenSearch:
+class RootSearch:
     """المحرك الرئيسي — ينسق جميع المكونات مع دعم on_event للشجرة الحية"""
 
     def __init__(self, on_event=None):
@@ -52,7 +52,7 @@ class FuckenSearch:
         Returns:
             تقرير شامل بنتائج البحث
         """
-        print(f"\n[*] Fucken Search: بدء البحث العميق...")
+        print(f"\n[*] RootSearch: بدء البحث العميق...")
         print(f"[*] الاستعلام: {query}")
         print(f"[*]  النموذج: {model}")
         print(f"[*]  الوضع: {'تحليل عميق' if deep_analysis else 'بحث سريع'}")
@@ -71,6 +71,12 @@ class FuckenSearch:
                 'message': 'لم يتم العثور على نتائج. جرب تغيير صياغة الاستعلام.'
             }
         
+        # 1.5 تصفية وفحص المصادر بالذكاء الاصطناعي لتأكيد ارتباطها وجدواها قبل الجلب
+        if deep_analysis:
+            print(f"[*] تصفية وتقييم مصادر البحث بالذكاء الاصطناعي...")
+            max_seeds = 25 if model == "fathom_max" else 15
+            results = await self.aggregator.analyzer.filter_sources_ai(query, results, max_seeds=max_seeds)
+
         # 2. تسليق المحتوى (إذا كان تحليل عميق)
         if deep_analysis:
             print(f"\n[*]  تسليق المواقع واستخراج المحتوى...")
@@ -80,7 +86,7 @@ class FuckenSearch:
                     query=query,
                     max_nodes=config.fathom_max_nodes,
                     max_depth=config.fathom_max_depth,
-                    concurrency=config.fathom_max_concurrency,
+                    concurrency=max(config.fathom_max_concurrency, 150),
                     aggregator=self.aggregator,
                     k_trusted=k_trusted
                 )

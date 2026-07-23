@@ -141,5 +141,47 @@ class TestCognitiveReasoningPipeline(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(output_text, "Cristiano Ronaldo height is 1.87 meters (6 feet 2 inches).")
 
 
+from core.cognitive import SmartSourceFilter
+from core.search_engine import SearchResult
+
+class TestSmartSourceFilter(unittest.TestCase):
+    def setUp(self):
+        self.ssf = SmartSourceFilter()
+
+    def test_normalize_url(self):
+        url = "https://www.google.com/path/to/page?utm_source=1&ref=xyz"
+        normalized = self.ssf.normalize_url(url)
+        self.assertEqual(normalized, "https://google.com/path/to/page")
+
+    def test_is_spam(self):
+        # Spam domain keyword
+        self.assertTrue(self.ssf.is_spam("https://casino-online.com/home"))
+        # Spam content keyword
+        self.assertTrue(self.ssf.is_spam("https://example.com", title="win free lottery now", snippet="click here to make money online"))
+        # Safe URL & content
+        self.assertFalse(self.ssf.is_spam("https://nasa.gov", title="Mars Rover Mission", snippet="NASA's rover details"))
+
+    def test_score_source(self):
+        # High credibility & high overlap
+        score_high = self.ssf.score_source("https://nasa.gov", "Mars Mission", "NASA's Mars rover mission details", "Mars mission", base_score=1.0)
+        self.assertEqual(score_high, 1.0) # overlap=1.0, cred=1.0
+
+        # Spam domain should get 0.0
+        score_spam = self.ssf.score_source("https://casino-online.com", "Mars", "rover", "Mars rover")
+        self.assertEqual(score_spam, 0.0)
+
+    def test_filter_and_validate(self):
+        results = [
+            SearchResult(title="Mars Rover Details", url="https://nasa.gov", snippet="Mars mission by NASA", source="nasa", relevance_score=0.9),
+            SearchResult(title="Mars Rover Details", url="https://www.nasa.gov", snippet="Mars mission by NASA", source="nasa", relevance_score=0.8), # Duplicate!
+            SearchResult(title="Win online casino lottery", url="https://casino-spam.xyz", snippet="Make money fast", source="spam", relevance_score=0.9), # Spam!
+            SearchResult(title="Totally unrelated fruit", url="https://wikipedia.org", snippet="Banana orange apple", source="wikipedia", relevance_score=0.9) # Low relevance!
+        ]
+
+        filtered = self.ssf.filter_and_validate(results, query="Mars Rover")
+        self.assertEqual(len(filtered), 1)
+        self.assertEqual(filtered[0].url, "https://nasa.gov")
+
+
 if __name__ == '__main__':
     unittest.main()

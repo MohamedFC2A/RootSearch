@@ -1,5 +1,5 @@
 """
-Fucken Search - Unit Tests Suite
+RootSearch - Unit Tests Suite
 حزمة الاختبارات الآلية للتحقق من كفاءة عمل المشروع
 """
 

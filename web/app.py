@@ -15,6 +15,7 @@ import traceback
 from collections import OrderedDict
 from typing import Any, Dict, List, Optional
 from datetime import datetime
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -26,13 +27,40 @@ import uvicorn
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from config import config
-from main import FuckenSearch
+from main import RootSearch
 from core.search_engine import engine_display_name
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup logic
+    yield
+    # Shutdown logic
+    global _shared_engine
+    if _shared_engine is not None:
+        try:
+            await _shared_engine.close()
+        except Exception:
+            pass
+        finally:
+            _shared_engine = None
+    try:
+        from core.analyzer import close_global_session
+        await close_global_session()
+    except Exception:
+        pass
+    try:
+        from core.net import close_global_sessions
+        await close_global_sessions()
+    except Exception:
+        pass
+
 
 app = FastAPI(
     title="RootSearch",
     description="Deep Search Engine — البحث في أعماق الإنترنت",
     version="3.0.0",
+    lifespan=lifespan,
 )
 
 # ───────────────────────────────────────────
@@ -80,42 +108,26 @@ app.mount("/static", StaticFiles(directory=static_path), name="static")
 # ─────────────────────────────────
 #  SHARED ENGINE POOL (non-streaming endpoint)
 # ─────────────────────────────────
-# The non-streaming /api/search used to build AND tear down a full FuckenSearch
+# The non-streaming /api/search used to build AND tear down a full RootSearch
 # (aiohttp session + connector) on every request — no connection reuse and heavy
 # per-request TLS setup. We keep one lazily-created shared instance instead.
 # The streaming endpoint deliberately keeps its own per-request engine because it
 # needs an isolated on_event callback per SSE connection.
-_shared_engine: Optional[FuckenSearch] = None
+_shared_engine: Optional[RootSearch] = None
 _engine_lock = asyncio.Lock()
 
 
-async def get_shared_engine() -> FuckenSearch:
+async def get_shared_engine() -> RootSearch:
     """Lazily create and return the process-wide non-streaming engine (thread/task-safe)."""
     global _shared_engine
     if _shared_engine is None:
         async with _engine_lock:
             if _shared_engine is None:
-                _shared_engine = FuckenSearch()
+                _shared_engine = RootSearch()
     return _shared_engine
 
 
-@app.on_event("shutdown")
-async def _shutdown_shared_engine() -> None:
-    global _shared_engine
-    if _shared_engine is not None:
-        try:
-            await _shared_engine.close()
-        except Exception:
-            pass
-        finally:
-            _shared_engine = None
-    
-    # Close AIAnalyzer global session
-    try:
-        from core.analyzer import close_global_session
-        await close_global_session()
-    except Exception:
-        pass
+# Lifespan context manager handles engine and session shutdown cleanly.
 
 # ─────────────────────────────────────────────
 #  LRU CACHE
@@ -218,14 +230,24 @@ def _tree_edge(parent_id: str, child_id: str) -> str:
 
 @app.get("/", response_class=HTMLResponse)
 async def home(request: Request):
-    return templates.TemplateResponse(
-        request, "index.html", {"request": request, "title": "RootSearch"}
+    response = templates.TemplateResponse(
+        request, "compare.html", {"request": request, "title": "مقارنة القدرات المعرفية - Fathom"}
     )
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    return response
 
 
 @app.head("/")
 async def home_head():
     return HTMLResponse(content="", status_code=200)
+
+
+@app.get("/compare", response_class=HTMLResponse)
+async def compare(request: Request):
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(url="/", status_code=303)
+
 
 
 @app.get("/api/search")
@@ -298,18 +320,15 @@ async def api_search_stream(
         )
 
     # ── Event queue: backend → SSE generator ──
-    event_queue: asyncio.Queue = asyncio.Queue(maxsize=512)
+    event_queue: asyncio.Queue = asyncio.Queue()
 
     def on_event(event_type: str, payload: Dict[str, Any]) -> None:
         """Callback fired by SearchEngine & DeepScraper to push live events."""
-        try:
-            event_queue.put_nowait((event_type, payload))
-        except asyncio.QueueFull:
-            pass  # non-blocking; drop if queue full
+        event_queue.put_nowait((event_type, payload))
 
     async def pipeline():
         """Run the full 5-stage search pipeline, feeding events into the queue."""
-        engine: Optional[FuckenSearch] = None
+        engine: Optional[RootSearch] = None
         search_tasks: list = []
         scrape_tasks: list = []
 
@@ -323,7 +342,7 @@ async def api_search_stream(
                 "parentId": None,
             }))
 
-            engine = FuckenSearch(on_event=on_event)
+            engine = RootSearch(on_event=on_event)
 
             # ── STAGE 1: Source Discovery ──
             event_queue.put_nowait(("tree_node", {
@@ -373,6 +392,14 @@ async def api_search_stream(
             # pipeline can never drift from search_all's engine list.
             all_engine_funcs = se.engine_methods()
             engine_funcs = se.select_engines(q, suggested_engines=ai_suggested)
+
+            # Ensure representative engines for each category are included for the main query to populate all categories in the UI
+            additional_engines = ["reddit", "stackexchange", "arxiv", "openlibrary", "jina", "ecosia", "qwant"]
+            expanded_suggested = list(engine_funcs.keys())
+            for eng in additional_engines:
+                if eng in all_engine_funcs and eng not in expanded_suggested:
+                    expanded_suggested.append(eng)
+            engine_funcs = se.select_engines(q, suggested_engines=expanded_suggested)
 
             # محركات مختصرة للاستعلامات الفرعية (أفضل 3) للحد من التشعّب التوافقي.
             _primary_order = ["startpage", "duckduckgo", "wikipedia", "bing", "brave", "searx"]
@@ -486,6 +513,23 @@ async def api_search_stream(
                 "message": f"تم العثور على {format_scary_count_ar(total)} مصدر من {len(subqueries)} تفريعات",
             }))
 
+            if config.use_ai_analysis and config.deepseek_api_key:
+                event_queue.put_nowait(("node_status_update", {
+                    "nodeId": "source_discovery",
+                    "status": "processing",
+                    "label": "جاري التصفية الدلالية والتدقيق للمصادر بالذكاء الاصطناعي (DeepSeek)..."
+                }))
+                try:
+                    all_results = await analyzer.filter_sources_ai(q, all_results, max_seeds=20)
+                    total = len(all_results)
+                    event_queue.put_nowait(("node_status_update", {
+                        "nodeId": "source_discovery",
+                        "status": "success",
+                        "label": f"تم تصفية وتحديد {total} مصدر فائق الأهمية بالذكاء الاصطناعي",
+                    }))
+                except Exception as e:
+                    print(f"[⚠️] Web AI source filtering failed: {e}")
+
             if not all_results:
                 event_queue.put_nowait(("progress", {"status": "empty", "message": "لم يتم العثور على نتائج."}))
                 empty_report = {
@@ -494,7 +538,7 @@ async def api_search_stream(
                     "total_results": 0,
                     "categories": {},
                     "analysis": {
-                        "summary": "لم يتم العثور على أي نتائج بحث لهذا الاستعلام.",
+                        "summary": "لم يتم العثور على أي نتائج بحث لهذا الاستعلام بعد تصفية الذكاء الاصطناعي.",
                         "keywords": [],
                     },
                 }
@@ -526,7 +570,7 @@ async def api_search_stream(
                     query=q,
                     max_nodes=max_nodes,
                     max_depth=config.fathom_max_depth,
-                    concurrency=config.fathom_max_concurrency,
+                    concurrency=max(config.fathom_max_concurrency, 150),
                     aggregator=engine.aggregator,
                     k_trusted=k_trusted
                 )
@@ -724,11 +768,15 @@ async def api_search_stream(
         pipeline_task = asyncio.create_task(pipeline())
         try:
             while True:
+                if pipeline_task.done() and event_queue.empty():
+                    break
                 try:
                     event_type, payload = await asyncio.wait_for(
-                        event_queue.get(), timeout=60.0
+                        event_queue.get(), timeout=2.0
                     )
                 except asyncio.TimeoutError:
+                    if pipeline_task.done() and event_queue.empty():
+                        break
                     yield _sse("progress", {"status": "heartbeat", "message": "..."})
                     continue
 
@@ -739,6 +787,10 @@ async def api_search_stream(
         finally:
             if not pipeline_task.done():
                 pipeline_task.cancel()
+                try:
+                    await pipeline_task
+                except Exception:
+                    pass
 
     return StreamingResponse(
         event_generator(),
@@ -792,10 +844,14 @@ async def api_status():
     })
 
 
-@app.get("/search")
-async def search_page():
-    from fastapi.responses import RedirectResponse
-    return RedirectResponse(url="/", status_code=303)
+@app.get("/search", response_class=HTMLResponse)
+async def search_page(request: Request):
+    response = templates.TemplateResponse(
+        request, "index.html", {"request": request, "title": "RootSearch — البحث العميق"}
+    )
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    return response
 
 
 def start():

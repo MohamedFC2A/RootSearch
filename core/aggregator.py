@@ -1,5 +1,5 @@
 """
-Fucken Search - Result Aggregator Module
+RootSearch - Result Aggregator Module
 مجمع النتائج الخارق: يدمج، يرتب، ويصنف النتائج من جميع المصادر
 """
 
@@ -474,6 +474,9 @@ class ResultAggregator:
                 "label": "دمج وتصفية مصادر الويب المكررة...",
             })
         results = self.merge_duplicates(results)
+        from core.cognitive import SmartSourceFilter
+        ssf = SmartSourceFilter()
+        results = ssf.filter_and_validate(results, query, k_trusted=k_trusted)
         
         if not results:
             return {

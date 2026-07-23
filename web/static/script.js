@@ -23,8 +23,8 @@ let searchStartTime    = 0;
 let isKTrustedActive = localStorage.getItem('isKTrustedActive') === 'true';
 let isDepthUpgraded = false;
 let systemLimits = {
-    fathom_s1_max_sources: 35,
-    fathom_max_nodes: 150,
+    fathom_s1_max_sources: 200,
+    fathom_max_nodes: 600,
     fathom_max_concurrency: 12
 };
 
@@ -34,6 +34,9 @@ let liveTreeNodes = null;
 let liveTreeEdges = null;
 let liveTreeNetwork = null;
 let currentTreeViewMode = 'visual'; // 'visual' | 'linear'
+let activeInspectedNodeId = null;
+let userClickedInspectorNode = false;
+
 
 
 // ─── INIT ─────────────────────────────────────────────────────
@@ -62,6 +65,21 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // Apply persisted K-Trust UI state
     applyKTrustedUI();
+
+    // Initialize count-up animation for stats
+    initCountUpCounters();
+
+    // Check if there is an immediate query redirected from `/compare`
+    const immediateQuery = localStorage.getItem('runImmediateQuery');
+    if (immediateQuery) {
+        localStorage.removeItem('runImmediateQuery');
+        const selectedModel = localStorage.getItem('selectedSearchModel') || 'fathom_s1';
+        
+        // Wait a small delay to make sure UI is fully loaded
+        setTimeout(() => {
+            runQuickQuery(immediateQuery, selectedModel);
+        }, 100);
+    }
 });
 
 function updateEngineCounter() {
@@ -71,9 +89,9 @@ function updateEngineCounter() {
     const model = document.getElementById('searchModelInput')?.value || 'fathom_s1';
     let count = 0;
     if (model === 'fathom_s1') {
-        count = systemLimits.fathom_s1_max_sources || 35;
+        count = systemLimits.fathom_s1_max_sources || 200;
     } else {
-        count = systemLimits.fathom_max_nodes || 150;
+        count = systemLimits.fathom_max_nodes || 600;
     }
     
     // الـ HTML يحتوي بالفعل على كلمة "محركات" بعد الرقم، لذا نضع الرقم فقط (منع التكرار).
@@ -319,6 +337,7 @@ const TAB_PANELS = {
     tree: 'searchTreeContainer',
     graph: 'knowledgeGraphContainer',
     analysis: 'analysisPanel',
+    sources: 'sourcesPanel',
     results: 'resultsListWrapper',
 };
 
@@ -333,7 +352,6 @@ function toggleAiCapsule() {
 }
 
 function switchTab(tabId) {
-
     document.querySelectorAll('.tab-content').forEach(el => el.classList.add('is-hidden'));
     document.querySelectorAll('.tab-btn').forEach(btn => {
         btn.classList.remove('active');
@@ -343,9 +361,9 @@ function switchTab(tabId) {
     if (panel) panel.classList.remove('is-hidden');
     const btn = document.getElementById(`tab_${tabId}`);
     if (btn) { btn.classList.add('active'); btn.setAttribute('aria-selected', 'true'); }
+
     if (tabId === 'graph') {
         if (currentSearchData) {
-            // Build graph now that container is visible (has clientWidth/clientHeight)
             buildKnowledgeGraph(currentSearchData);
             setTimeout(() => {
                 if (visNetworkInstance) {
@@ -356,10 +374,138 @@ function switchTab(tabId) {
             }, 100);
         }
     }
+    if (tabId === 'sources' && currentSearchData) {
+        renderSourcesPage(currentSearchData);
+    }
+    // 'results' is an alias for sources in the new UI
+    if (tabId === 'results') {
+        switchTab('sources');
+    }
+}
+
+// ─── SOURCES PAGE RENDER ──────────────────────────────────────
+let _sourcesData = []; // cached for filter/sort
+
+function renderSourcesPage(report) {
+    const results    = report?.results || [];
+    const categories = report?.categories || {};
+    if (!results.length) return;
+
+    _sourcesData = results;
+
+    // Update stats bar
+    const uniqueDomains = new Set(results.map(r => {
+        try { return new URL(r.url || 'http://x').hostname; } catch { return r.url; }
+    })).size;
+    const avgRel = results.reduce((s, r) => s + (r.relevance_score || 0), 0) / results.length;
+    const catCount = Object.values(categories).filter(v => v && v.length > 0).length;
+
+    const elTotal  = document.getElementById('srcTotalCount');
+    const elUnique = document.getElementById('srcUniqueCount');
+    const elAvg    = document.getElementById('srcAvgRel');
+    const elCat    = document.getElementById('srcCatCount');
+    if (elTotal)  elTotal.textContent  = results.length;
+    if (elUnique) elUnique.textContent = uniqueDomains;
+    if (elAvg)    elAvg.textContent    = Math.round(avgRel * 100) + '%';
+    if (elCat)    elCat.textContent    = catCount;
+
+    // Update subtitle
+    const sub = document.getElementById('sourcesSubtitle');
+    if (sub) sub.textContent = `${results.length} مصدر محلَّل · ${uniqueDomains} نطاق فريد · متوسط الصلة ${Math.round(avgRel * 100)}%`;
+
+    _renderSourceRows(results);
+}
+
+function _buildSourceRowHTML(r, idx) {
+    const url      = r.url || '#';
+    let   domain   = '#';
+    try   { domain = new URL(url).hostname.replace(/^www\./, ''); } catch { domain = url; }
+    const title    = escapeHtml(r.title || domain);
+    const snippet  = escapeHtml((r.snippet || r.summary || r.ai_summary || '').slice(0, 160));
+    const relScore = r.relevance_score || 0;
+    const relPct   = Math.round(relScore * 100);
+    const relClass = relPct >= 70 ? 'high' : relPct >= 40 ? 'medium' : 'low';
+    const cw       = r.metadata?.credibility_weight ?? r.credibility_weight ?? 0.3;
+    const tierClass = cw === 1.0 ? 't1' : cw === 0.7 ? 't2' : 't3';
+    const tierLabel = cw === 1.0 ? 'Tier 1' : cw === 0.7 ? 'Tier 2' : 'Tier 3';
+    const words    = r.metadata?.word_count || r.word_count || 0;
+    const favSrc   = `https://www.google.com/s2/favicons?domain=${domain}&sz=32`;
+
+    return `<div class="source-row-card" onclick="openSourceUrl('${escapeHtml(url)}')">
+        <span class="src-rank">${idx + 1}</span>
+        <div class="src-favicon-wrap">
+            <img class="src-favicon" src="${favSrc}" alt="" loading="lazy"
+                 onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+            <i class="fas fa-globe src-favicon-fallback" style="display:none"></i>
+        </div>
+        <div class="src-body">
+            <a class="src-title" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer"
+               onclick="event.stopPropagation()" title="${title}">${title}</a>
+            <span class="src-domain">${domain}</span>
+            ${snippet ? `<span class="src-snippet">${snippet}</span>` : ''}
+        </div>
+        <div class="src-meta">
+            <span class="src-rel-badge ${relClass}">${relPct}%</span>
+            <span class="src-tier-badge ${tierClass}">${tierLabel}</span>
+            ${words ? `<span class="src-words">${words.toLocaleString()} كلمة</span>` : ''}
+        </div>
+    </div>`;
+}
+
+function _renderSourceRows(rows) {
+    const list = document.getElementById('sourcesFullList');
+    if (!list) return;
+    if (!rows || rows.length === 0) {
+        list.innerHTML = `<div class="sources-empty"><i class="fas fa-search-minus"></i>لا توجد مصادر مطابقة للبحث</div>`;
+        return;
+    }
+    list.innerHTML = rows.map((r, i) => _buildSourceRowHTML(r, i)).join('');
+}
+
+function openSourceUrl(url) {
+    window.open(url, '_blank', 'noopener,noreferrer');
+}
+
+function filterSourcesList(query) {
+    if (!_sourcesData.length) return;
+    const q = (query || '').toLowerCase().trim();
+    if (!q) { _renderSourceRows(_sourcesData); return; }
+    const filtered = _sourcesData.filter(r => {
+        const text = ((r.title || '') + ' ' + (r.url || '') + ' ' + (r.snippet || '') + ' ' + (r.summary || '')).toLowerCase();
+        return text.includes(q);
+    });
+    _renderSourceRows(filtered);
+}
+
+function sortSourcesList(mode) {
+    if (!_sourcesData.length) return;
+    const sorted = [..._sourcesData];
+    if (mode === 'relevance') {
+        sorted.sort((a, b) => (b.relevance_score || 0) - (a.relevance_score || 0));
+    } else if (mode === 'credibility') {
+        sorted.sort((a, b) => {
+            const cw = r => r.metadata?.credibility_weight ?? r.credibility_weight ?? 0.3;
+            return cw(b) - cw(a);
+        });
+    } else if (mode === 'words') {
+        sorted.sort((a, b) => {
+            const wc = r => r.metadata?.word_count || r.word_count || 0;
+            return wc(b) - wc(a);
+        });
+    } else if (mode === 'domain') {
+        sorted.sort((a, b) => {
+            let da = '#', db = '#';
+            try { da = new URL(a.url || 'http://x').hostname; } catch {}
+            try { db = new URL(b.url || 'http://x').hostname; } catch {}
+            return da.localeCompare(db);
+        });
+    }
+    _renderSourceRows(sorted);
 }
 
 // ─── SEARCH INPUT MANAGEMENT ─────────────────────────────────
 function initSearchInput() {
+
     const input = document.getElementById('searchInput');
     const clearBtn = document.getElementById('clearBtn');
     const submitBtn = document.getElementById('searchSubmitBtn');
@@ -584,11 +730,29 @@ function scrollTreeToActiveStage(stage) {
 
 function resetLiveTree() {
     treeNodes.clear();
-    const columns = ['col_trigger', 'col_source_discovery', 'col_extraction', 'col_semantic_analysis', 'col_verification'];
-    columns.forEach(id => {
-        const col = document.getElementById(id);
-        if (col) col.innerHTML = '';
+    
+    // Reset our vertical stages and collapse/expanded states
+    const stages = ['trigger', 'source_discovery', 'extraction', 'semantic_analysis', 'verification'];
+    stages.forEach(st => {
+        const logsContainer = document.getElementById(`logs_${st}`);
+        if (logsContainer) logsContainer.innerHTML = '';
+        const block = document.getElementById(`stage_block_${st}`);
+        if (block) {
+            block.dataset.status = 'pending';
+            block.classList.remove('collapsed');
+        }
     });
+
+    // Reset inspector
+    activeInspectedNodeId = null;
+    userClickedInspectorNode = false;
+    const placeholder = document.getElementById('inspectorPlaceholder');
+    const content = document.getElementById('inspectorContent');
+    if (placeholder) placeholder.style.display = 'flex';
+    if (content) {
+        content.innerHTML = '';
+        content.style.display = 'none';
+    }
 
     const container = document.getElementById('liveTreeCanvas');
     if (!container) return;
@@ -639,7 +803,7 @@ function resetLiveTree() {
 
     liveTreeNetwork = new vis.Network(container, { nodes: liveTreeNodes, edges: liveTreeEdges }, options);
     
-    // Node selection opens the sheet
+    // Node selection opens the sheet (which now targets our inspector panel)
     liveTreeNetwork.on('click', function(params) {
         if (params.nodes && params.nodes.length > 0) {
             const nodeId = params.nodes[0];
@@ -653,55 +817,73 @@ function resetLiveTree() {
     const status = document.getElementById('treeStatus');
     if (status) status.textContent = 'جاري تهيئة خط الأنابيب...';
 
-    // Reset stage headers
-    document.querySelectorAll('.stage-header-item').forEach(el => {
-        el.classList.remove('active', 'done');
-    });
-
     // Show badge
     const badge = document.getElementById('treeLiveBadge');
     if (badge) badge.style.display = 'flex';
 }
 
+function toggleStageBlock(stage) {
+    const block = document.getElementById(`stage_block_${stage}`);
+    if (block) {
+        block.classList.toggle('collapsed');
+    }
+}
+window.toggleStageBlock = toggleStageBlock;
+
 function activateStageHeader(stage) {
-    const stages = ['trigger', 'source_discovery', 'extraction', 'semantic_analysis', 'verification'];
-    const idx = stages.indexOf(stage);
-    stages.forEach((s, i) => {
-        const el = document.querySelector(`.stage-header-item[data-stage="${s}"]`);
-        if (!el) return;
-        el.classList.remove('active', 'done');
-        if (i < idx) el.classList.add('done');
-        else if (i === idx) el.classList.add('active');
-    });
+    const block = document.getElementById(`stage_block_${stage}`);
+    if (block) {
+        block.classList.remove('collapsed');
+        if (block.dataset.status === 'pending') {
+            block.dataset.status = 'fetching';
+        }
+    }
 }
 
 function createTreeNode(nodeId, stage, status, label, metadata, parentId) {
-    // 1. Create HTML Node element in columns
-    const col = document.getElementById(`col_${stage}`);
-    if (col) {
-        let node = document.getElementById(`html_node_${nodeId}`);
-        if (!node) {
-            node = document.createElement('div');
-            node.className = 'tree-node';
-            node.id = `html_node_${nodeId}`;
-            node.dataset.nodeId = nodeId;
-            node.dataset.status = status;
-            node.dataset.stage = stage;
+    // 1. Manage HTML stage logs
+    if (nodeId === stage) {
+        const block = document.getElementById(`stage_block_${stage}`);
+        if (block) {
+            block.dataset.status = status;
+            treeNodes.set(nodeId, block); // Map the stage ID to the block element
+        }
+    } else {
+        const logsContainer = document.getElementById(`logs_${stage}`);
+        if (logsContainer) {
+            let logRow = document.getElementById(`html_node_${nodeId}`);
+            if (!logRow) {
+                logRow = document.createElement('div');
+                logRow.className = 'log-row';
+                logRow.id = `html_node_${nodeId}`;
+                logRow.dataset.nodeId = nodeId;
+                logRow.dataset.status = status;
+                logRow.dataset.stage = stage;
 
-            const initialMicro = status === 'pending' ? 'جاري التجهيز للعملية...' : '—';
-            node.innerHTML = `
-                <div class="node-status-row">
-                    <span class="node-status-dot"></span>
-                    <span class="node-status-tag">${STAGE_LABELS[status] || status}</span>
-                </div>
-                <div class="node-label">${escapeHtml(label)}</div>
-                <div class="node-microcopy" id="micro_${nodeId}">${initialMicro}</div>
-            `;
+                const dot = document.createElement('span');
+                dot.className = 'log-status-dot';
+                logRow.appendChild(dot);
 
-            // Click opens bottom sheet
-            node.addEventListener('click', () => openNodeSheet(nodeId, stage, status, label, metadata));
-            col.appendChild(node);
-            treeNodes.set(nodeId, node);
+                const labelEl = document.createElement('span');
+                labelEl.className = 'log-label';
+                labelEl.textContent = label;
+                logRow.appendChild(labelEl);
+
+                const badge = document.createElement('span');
+                badge.className = 'log-meta-badge';
+                badge.textContent = '—';
+                logRow.appendChild(badge);
+
+                logRow.addEventListener('click', () => {
+                    selectInspectorNode(nodeId, stage, status, label, metadata, false);
+                });
+
+                logsContainer.appendChild(logRow);
+                treeNodes.set(nodeId, logRow);
+
+                // Auto inspect in real-time
+                selectInspectorNode(nodeId, stage, status, label, metadata, true);
+            }
         }
     }
 
@@ -792,64 +974,66 @@ function createTreeNode(nodeId, stage, status, label, metadata, parentId) {
     }
 
     activateStageHeader(stage);
-    scrollTreeToActiveStage(stage);
     return null;
 }
 
 function updateTreeNode(nodeId, status, label, metadata, parentId) {
-    // 1. Update HTML Node element
-    const node = treeNodes.get(nodeId);
-    if (node) {
-        node.dataset.status = status;
-
-        const statusTag = node.querySelector('.node-status-tag');
-        if (statusTag) statusTag.textContent = STAGE_LABELS[status] || status;
-
-        const labelEl = node.querySelector('.node-label');
-        if (labelEl) labelEl.textContent = label;
-
-        const micro = node.querySelector('.node-microcopy');
-        if (micro) {
-            if (status === 'failed') {
-                const err = metadata?.error || metadata?.reason || 'فشلت العملية';
-                micro.textContent = `خطأ: ${err}`;
-            } else if (status === 'pending') {
-                micro.textContent = 'جاري التجهيز للعملية...';
-            } else if (metadata) {
-                const parts = [];
-                if (metadata.words)   parts.push(`${metadata.words.toLocaleString()} كلمة`);
-                if (metadata.count !== undefined) parts.push(`تم العثور على ${formatScaryCount(metadata.count)} مصدر`);
-                if (metadata.method)  parts.push(metadata.method);
-                if (metadata.cb_state && metadata.cb_state !== 'closed') parts.push(`CB: ${metadata.cb_state}`);
-                micro.textContent = parts.join(' · ') || '—';
-            } else {
-                micro.textContent = label.length > 40 ? label.slice(0, 40) + '…' : label;
+    // 1. Update HTML Stage block or Log row
+    if (nodeId === 'trigger' || nodeId === 'source_discovery' || nodeId === 'extraction' || nodeId === 'semantic_analysis' || nodeId === 'verification') {
+        const block = treeNodes.get(nodeId) || document.getElementById(`stage_block_${nodeId}`);
+        if (block) {
+            block.dataset.status = status;
+            if (status === 'fetching' || status === 'processing' || status === 'success') {
+                activateStageHeader(nodeId);
             }
         }
+    } else {
+        const logRow = treeNodes.get(nodeId);
+        if (logRow) {
+            logRow.dataset.status = status;
 
-        // Add retry button on failed nodes
-        if (status === 'failed' && metadata?.can_retry) {
-            if (!node.querySelector('.node-retry-btn')) {
-                const retryBtn = document.createElement('button');
-                retryBtn.className = 'node-retry-btn';
-                retryBtn.innerHTML = '<i class="fas fa-redo-alt"></i> إعادة المحاولة';
-                retryBtn.addEventListener('click', e => {
-                    e.stopPropagation();
-                    showToast('جاري إعادة تشغيل البحث...', 'info');
-                    handleSearch(null);
-                });
-                node.appendChild(retryBtn);
+            const labelEl = logRow.querySelector('.log-label');
+            if (labelEl) labelEl.textContent = label;
+
+            const badge = logRow.querySelector('.log-meta-badge');
+            if (badge) {
+                if (status === 'failed') {
+                    const err = metadata?.error || metadata?.reason || 'فشل';
+                    badge.textContent = 'خطأ';
+                    badge.title = err;
+                } else if (metadata) {
+                    const parts = [];
+                    if (metadata.word_count !== undefined) parts.push(`${metadata.word_count} كلمة`);
+                    else if (metadata.words !== undefined) parts.push(`${metadata.words} كلمة`);
+
+                    if (metadata.count !== undefined) parts.push(`${metadata.count} نتائج`);
+
+                    badge.textContent = parts.join(' · ') || '✓';
+                } else {
+                    badge.textContent = '✓';
+                }
             }
-        }
 
-        // Mark stage header
-        if (status === 'success' || status === 'done') {
-            const stageHeader = document.querySelector(`.stage-header-item[data-stage="${node.dataset.stage}"]`);
-            if (stageHeader) stageHeader.classList.add('done');
-        }
+            // Retry button
+            if (status === 'failed' && metadata?.can_retry) {
+                if (!logRow.querySelector('.log-retry-btn')) {
+                    const retryBtn = document.createElement('button');
+                    retryBtn.className = 'log-retry-btn';
+                    retryBtn.innerHTML = '<i class="fas fa-redo-alt"></i>';
+                    retryBtn.title = 'إعادة المحاولة';
+                    retryBtn.addEventListener('click', e => {
+                        e.stopPropagation();
+                        showToast('جاري إعادة تشغيل البحث...', 'info');
+                        handleSearch(null);
+                    });
+                    logRow.appendChild(retryBtn);
+                }
+            }
 
-        if (node.dataset.stage) {
-            scrollTreeToActiveStage(node.dataset.stage);
+            // Sync with active inspector
+            if (activeInspectedNodeId === nodeId) {
+                selectInspectorNode(nodeId, logRow.dataset.stage, status, label, metadata, true);
+            }
         }
     }
 
@@ -891,10 +1075,33 @@ function updateTreeNode(nodeId, status, label, metadata, parentId) {
     }
 }
 
-function openNodeSheet(nodeId, stage, status, label, metadata) {
-    const sheet = document.getElementById('nodeSheet');
-    const content = document.getElementById('sheetContent');
-    if (!sheet || !content) return;
+function selectInspectorNode(nodeId, stage, status, label, metadata, isAuto = false) {
+    if (isAuto && userClickedInspectorNode) {
+        return; // manual click locks inspector
+    }
+    
+    if (!isAuto) {
+        userClickedInspectorNode = true;
+    }
+    
+    activeInspectedNodeId = nodeId;
+
+    // Toggle active row highlights
+    document.querySelectorAll('.log-row').forEach(row => {
+        row.classList.remove('active-inspect');
+    });
+    const activeRow = document.getElementById(`html_node_${nodeId}`);
+    if (activeRow) {
+        activeRow.classList.add('active-inspect');
+    }
+
+    const placeholder = document.getElementById('inspectorPlaceholder');
+    const content = document.getElementById('inspectorContent');
+    if (!content) return;
+
+    if (placeholder) placeholder.style.display = 'none';
+    content.style.display = 'flex';
+    content.style.flexDirection = 'column';
 
     const statusColors = {
         success: 'var(--success-text)', failed: 'var(--error-text)',
@@ -926,84 +1133,90 @@ function openNodeSheet(nodeId, stage, status, label, metadata) {
             const relevancePercent = Math.round(relevanceScore * 100);
 
             metaHTML = `
-                <div class="source-detail-card" style="margin-top: var(--sp-4);">
-                    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--sp-4);background:rgba(255,255,255,0.02);padding:12px;border-radius:var(--r-md);border:1px solid var(--border)">
-                        <div style="display:flex;align-items:center;gap:8px;">
-                            <i class="fas fa-globe" style="color:var(--accent);font-size:16px;"></i>
-                            <a href="${metadata.url}" target="_blank" style="color:var(--text);font-weight:600;text-decoration:none;font-size:13px;word-break:break-all;">
+                <div class="source-detail-card" style="margin-top: 10px;">
+                    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;background:rgba(255,255,255,0.02);padding:10px;border-radius:var(--r-md);border:1px solid var(--border);gap:10px;">
+                        <div style="display:flex;align-items:center;gap:6px;overflow:hidden;flex-grow:1;">
+                            <i class="fas fa-globe" style="color:var(--accent);font-size:13px;flex-shrink:0;"></i>
+                            <a href="${metadata.url}" target="_blank" style="color:var(--text);font-weight:600;text-decoration:none;font-size:11.5px;word-break:break-all;text-overflow:ellipsis;white-space:nowrap;overflow:hidden;" title="${metadata.url}">
                                 ${escapeHtml(metadata.url.replace(/https?:\/\//, '').split('/')[0])}
-                                <i class="fas fa-external-link-alt" style="font-size:10px;margin-right:4px;"></i>
+                                <i class="fas fa-external-link-alt" style="font-size:8px;margin-right:4px;"></i>
                             </a>
                         </div>
-                        <span class="cred-badge" style="color:${badgeColor};background:${badgeBg};border:1px solid ${badgeColor}33;padding:4px 8px;border-radius:30px;font-size:10px;font-weight:600;">
+                        <span class="cred-badge" style="color:${badgeColor};background:${badgeBg};border:1px solid ${badgeColor}33;padding:2px 6px;border-radius:30px;font-size:9px;font-weight:600;flex-shrink:0;">
                             ${credibilityTier}
                         </span>
                     </div>
 
-                    <h3 style="font-size:16px;font-weight:700;color:var(--text);margin-bottom:12px;line-height:1.5;">${escapeHtml(metadata.title || label)}</h3>
+                    <h3 style="font-size:13.5px;font-weight:700;color:var(--text);margin-bottom:10px;line-height:1.5;text-align:right;">${escapeHtml(metadata.title || label)}</h3>
 
-                    <div class="details-snippet-box" style="background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r-md);padding:14px;margin-bottom:16px;max-height:180px;overflow-y:auto;font-size:12.5px;color:var(--text-muted);line-height:1.6;direction:rtl;text-align:right;">
+                    <div class="details-snippet-box" style="background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r-md);padding:10px;margin-bottom:12px;max-height:140px;overflow-y:auto;font-size:11.5px;color:var(--text-muted);line-height:1.6;direction:rtl;text-align:right;">
                         ${escapeHtml(metadata.snippet || 'لا يوجد مقتطف نصي متاح.')}
                     </div>
 
-                    <div style="margin-bottom:20px;">
-                        <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:6px;">
+                    <div style="margin-bottom:14px;">
+                        <div style="display:flex;justify-content:space-between;font-size:11px;margin-bottom:5px;">
                             <span style="color:var(--text-muted)">نسبة المطابقة والموثوقية:</span>
                             <span style="color:var(--accent);font-weight:bold;">${relevancePercent}%</span>
                         </div>
-                        <div style="width:100%;height:6px;background:var(--border);border-radius:10px;overflow:hidden;">
+                        <div style="width:100%;height:5px;background:var(--border);border-radius:10px;overflow:hidden;">
                             <div style="width:${relevancePercent}%;height:100%;background:linear-gradient(90deg, var(--accent), #a78bfa);border-radius:10px;box-shadow:0 0 6px var(--accent);"></div>
                         </div>
                     </div>
 
-                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;font-size:11px;color:var(--text-muted);background:rgba(255,255,255,0.01);padding:12px;border-radius:var(--r-md);border:1px solid var(--border)">
-                        <div><i class="fas fa-file-alt" style="margin-left:6px;"></i> الكلمات المستخرجة: <strong style="color:var(--text)">${wordsCount.toLocaleString()} كلمة</strong></div>
-                        <div><i class="fas fa-robot" style="margin-left:6px;"></i> أداة الاستخراج: <strong style="color:var(--text)">${escapeHtml(extractionMethod)}</strong></div>
-                        <div><i class="fas fa-network-wired" style="margin-left:6px;"></i> خادم الويب (IP): <strong style="color:var(--text)">${escapeHtml(resolvedIp)}</strong></div>
-                        <div><i class="fas fa-shield-halved" style="margin-left:6px;"></i> حالة الحظر (Circuit): <strong style="color:var(--text)">${escapeHtml(cbState)}</strong></div>
+                    <div style="display:flex;flex-direction:column;gap:6px;font-size:11px;color:var(--text-muted);background:rgba(255,255,255,0.01);padding:10px;border-radius:var(--r-md);border:1px solid var(--border)">
+                        <div style="display:flex;justify-content:space-between;"><span><i class="fas fa-file-alt" style="margin-left:6px;"></i> الكلمات المستخرجة:</span> <strong style="color:var(--text)">${wordsCount.toLocaleString()} كلمة</strong></div>
+                        <div style="display:flex;justify-content:space-between;"><span><i class="fas fa-robot" style="margin-left:6px;"></i> أداة الاستخراج:</span> <strong style="color:var(--text)">${escapeHtml(extractionMethod)}</strong></div>
+                        <div style="display:flex;justify-content:space-between;"><span><i class="fas fa-network-wired" style="margin-left:6px;"></i> خادم الويب (IP):</span> <strong style="color:var(--text)">${escapeHtml(resolvedIp)}</strong></div>
+                        <div style="display:flex;justify-content:space-between;"><span><i class="fas fa-shield-halved" style="margin-left:6px;"></i> حالة الحظر (Circuit):</span> <strong style="color:var(--text)">${escapeHtml(cbState)}</strong></div>
                     </div>
                 </div>
             `;
         } else {
             metaHTML = Object.entries(metadata)
                 .filter(([k, v]) => v !== undefined && v !== null && v !== '')
-                .map(([k, v]) => `<tr><td style="color:var(--text-muted);padding:4px 8px 4px 0">${escapeHtml(k)}</td><td style="font-family:'JetBrains Mono',monospace;font-size:12px">${escapeHtml(String(v))}</td></tr>`)
+                .map(([k, v]) => `<tr><td style="color:var(--text-muted);padding:4px 8px 4px 0;font-size:11px;text-align:right;">${escapeHtml(k)}</td><td style="font-family:'JetBrains Mono',monospace;font-size:11px;direction:ltr;text-align:left;word-break:break-all;">${escapeHtml(String(v))}</td></tr>`)
                 .join('');
-            if (metaHTML) metaHTML = `<table style="width:100%;border-collapse:collapse;margin-top:12px">${metaHTML}</table>`;
+            if (metaHTML) metaHTML = `<table style="width:100%;border-collapse:collapse;margin-top:10px;">${metaHTML}</table>`;
         }
     }
 
     content.innerHTML = `
-        <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
-            <span style="color:${statusColors[status] || 'var(--text-muted)'};font-family:'JetBrains Mono',monospace;font-size:11px;font-weight:600;text-transform:uppercase">${status}</span>
-            <span style="color:var(--text-muted);font-size:11px">${STAGE_LABELS[stage] || stage}</span>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;border-bottom:1px solid var(--border);padding-bottom:8px;">
+            <div style="display:flex;align-items:center;gap:6px;">
+                <span class="log-status-dot" style="background:${statusColors[status] || 'var(--text-muted)'};width:8px;height:8px;border-radius:50%;"></span>
+                <span style="color:${statusColors[status] || 'var(--text-muted)'};font-family:'JetBrains Mono',monospace;font-size:10px;font-weight:600;text-transform:uppercase;">${STAGE_LABELS[status] || status}</span>
+            </div>
+            <span style="color:var(--text-muted);font-size:11px;font-weight:500;">${STAGE_LABELS[stage] || stage}</span>
         </div>
-        <h4 style="font-size:16px;margin-bottom:8px">${escapeHtml(label)}</h4>
-        <div style="font-size:12px;color:var(--text-muted);font-family:'JetBrains Mono',monospace">ID: ${escapeHtml(nodeId)}</div>
+        <h4 style="font-size:13px;font-weight:700;margin-bottom:8px;color:var(--text-primary);text-align:right;line-height:1.4;">${escapeHtml(label)}</h4>
+        <div style="font-size:10px;color:var(--text-muted);font-family:'JetBrains Mono',monospace;text-align:right;margin-bottom:8px;">ID: ${escapeHtml(nodeId)}</div>
         ${metaHTML}
     `;
+}
 
-    sheet.classList.add('open');
-    sheet.setAttribute('aria-hidden', 'false');
-    document.getElementById('sheetBackdrop').style.display = 'block';
+function openNodeSheet(nodeId, stage, status, label, metadata) {
+    selectInspectorNode(nodeId, stage, status, label, metadata, false);
 }
 
 function closeNodeSheet() {
-    const sheet = document.getElementById('nodeSheet');
-    const backdrop = document.getElementById('sheetBackdrop');
-    if (sheet) { sheet.classList.remove('open'); sheet.setAttribute('aria-hidden', 'true'); }
-    if (backdrop) backdrop.style.display = 'none';
+    activeInspectedNodeId = null;
+    userClickedInspectorNode = false;
+    const placeholder = document.getElementById('inspectorPlaceholder');
+    const content = document.getElementById('inspectorContent');
+    if (placeholder) placeholder.style.display = 'flex';
+    if (content) {
+        content.innerHTML = '';
+        content.style.display = 'none';
+    }
 }
 
 function openBottomContentSheet(html) {
-    const sheet = document.getElementById('nodeSheet');
-    const content = document.getElementById('sheetContent');
-    if (!sheet || !content) return;
+    const placeholder = document.getElementById('inspectorPlaceholder');
+    const content = document.getElementById('inspectorContent');
+    if (!content) return;
+    if (placeholder) placeholder.style.display = 'none';
+    content.style.display = 'block';
     content.innerHTML = html;
-    sheet.classList.add('open');
-    sheet.setAttribute('aria-hidden', 'false');
-    const backdrop = document.getElementById('sheetBackdrop');
-    if (backdrop) backdrop.style.display = 'block';
 }
 
 
@@ -1015,6 +1228,52 @@ function startSSEStream(query, model, attempt = 0) {
     const MAX_RECONNECTS = 3;
     // Cancel any pending reconnect from a previous attempt of this stream.
     if (window._sseReconnectTimer) { clearTimeout(window._sseReconnectTimer); window._sseReconnectTimer = null; }
+    
+    // Throttler with trailing edge execution
+    function throttle(func, wait) {
+        let timeout = null;
+        let lastArgs = null;
+        let lastRan = 0;
+        const throttled = function(...args) {
+            const now = Date.now();
+            const remaining = wait - (now - lastRan);
+            if (remaining <= 0 || remaining > wait) {
+                if (timeout) {
+                    clearTimeout(timeout);
+                    timeout = null;
+                }
+                lastRan = now;
+                func(...args);
+            } else {
+                lastArgs = args;
+                if (!timeout) {
+                    timeout = setTimeout(() => {
+                        lastRan = Date.now();
+                        timeout = null;
+                        func(...lastArgs);
+                    }, remaining);
+                }
+            }
+        };
+        throttled.cancel = () => {
+            if (timeout) {
+                clearTimeout(timeout);
+                timeout = null;
+            }
+        };
+        return throttled;
+    }
+
+    const throttledUpdate = throttle((report) => {
+        renderResultsList(report);
+        renderAnalysis(report);
+        renderSemanticVisualPanel(report);
+        const isGraphVisible = !document.getElementById('knowledgeGraphContainer').classList.contains('is-hidden');
+        if (isGraphVisible) {
+            buildKnowledgeGraph(report);
+        }
+    }, 1500); // Render at most once every 1.5 seconds to keep the UI smooth and responsive
+
     const url = `${API_BASE}/api/search/stream?q=${encodeURIComponent(query)}&model=${model}&nocache=true` + (isKTrustedActive ? '&k_trusted=true' : '');
     const sse = new EventSource(url);
     activeSSE = sse;
@@ -1029,12 +1288,7 @@ function startSSEStream(query, model, attempt = 0) {
         try {
             const report = JSON.parse(e.data);
             currentSearchData = report;
-            renderResultsList(report);
-            renderAnalysis(report);
-            const isGraphVisible = !document.getElementById('knowledgeGraphContainer').classList.contains('is-hidden');
-            if (isGraphVisible) {
-                buildKnowledgeGraph(report);
-            }
+            throttledUpdate(report);
         } catch (_) {}
     });
 
@@ -1104,8 +1358,16 @@ function startSSEStream(query, model, attempt = 0) {
                 window.searchTimerInterval = null;
             }
 
+            throttledUpdate.cancel();
+
             const report = JSON.parse(e.data);
             currentSearchData = report;
+
+            // Ensure final full UI render
+            renderResultsList(report);
+            renderAnalysis(report);
+            renderSemanticVisualPanel(report);
+            buildKnowledgeGraph(report);
 
             // Toggle active status and results count containers
             const activeStatus = document.getElementById('searchActiveStatus');
@@ -1157,16 +1419,17 @@ function startSSEStream(query, model, attempt = 0) {
                     `;
                 }
 
-                // Build sources list
+                // Build sources count only (full sources page is in the Results tab)
                 const sources = directAnswer.sources || [];
+                const totalSrcs = sources.length || (report.results || []).length;
                 let sourcesHtml = '';
-                if (sources.length) {
-                    sourcesHtml = `<div class="da-sources">
-                        <span class="da-sources-label"><i class="fas fa-link"></i> المصادر:</span>
-                        ${sources.map((s, i) => `
-                            <a class="da-source-chip" href="${escapeHtml(s.url || '#')}" target="_blank" rel="noopener noreferrer" title="${escapeHtml(s.title || s.domain || '')}">
-                                <i class="fas fa-external-link-alt"></i> ${escapeHtml(s.domain || s.title || `مصدر ${i+1}`)}
-                            </a>`).join('')}
+                if (totalSrcs > 0) {
+                    sourcesHtml = `<div class="da-sources-count">
+                        <i class="fas fa-database"></i>
+                        <span>استناداً إلى <strong>${totalSrcs}</strong> مصدر موثق</span>
+                        <button class="da-view-sources-btn" onclick="switchTab('results')" title="عرض جميع المصادر">
+                            <i class="fas fa-list-ul"></i> عرض المصادر
+                        </button>
                     </div>`;
                 }
 
@@ -1207,6 +1470,7 @@ function startSSEStream(query, model, attempt = 0) {
 
             // Populate all panels
             renderAnalysis(report);
+            renderSemanticVisualPanel(report);
             renderResultsList(report);
             buildKnowledgeGraph(report);
 
@@ -1219,9 +1483,10 @@ function startSSEStream(query, model, attempt = 0) {
                 setSearchButtonLoading(false);
             }, 600);
 
-            // Auto-switch to results tab after search (direct answer shows above tabs)
+            // Auto-switch to Sources tab after search completes
             setTimeout(() => {
-                switchTab('results');
+                renderSourcesPage(report);
+                switchTab('sources');
             }, 1200);
 
 
@@ -1302,8 +1567,110 @@ function startSSEStream(query, model, attempt = 0) {
     };
 }
 
+// ─── SEMANTIC ANALYSIS VISUAL PANEL ──────────────────────────
+/**
+ * Builds a rich visual summary inside the semantic_analysis stage body
+ * showing: total/filtered/passed counts, credibility tier distribution,
+ * and detected content categories. Called once when the final report arrives.
+ */
+function renderSemanticVisualPanel(report) {
+    const body = document.getElementById('stage_body_semantic_analysis');
+    if (!body) return;
+
+    // Don't render twice
+    if (body.querySelector('.semantic-visual-panel')) return;
+
+    const results    = report?.results || [];
+    const categories = report?.categories || {};
+    const analysis   = report?.analysis || {};
+    const stats      = analysis.statistics || {};
+    const total      = results.length;
+    if (total === 0) return;
+
+    // Credibility tier counts
+    const t1 = results.filter(r => r.metadata?.credibility_weight === 1.0).length;
+    const t2 = results.filter(r => r.metadata?.credibility_weight === 0.7).length;
+    const t3 = total - t1 - t2;
+
+    // Avg relevance
+    const avgRel = total > 0
+        ? (results.reduce((s, r) => s + (r.relevance_score || 0), 0) / total)
+        : 0;
+    const avgPct = Math.round(avgRel * 100);
+
+    // Unique domains
+    const uniqueDomains = new Set(results.map(r => {
+        try { return new URL(r.url || 'http://x').hostname; } catch { return r.url; }
+    })).size;
+
+    // Top categories
+    const catEntries = Object.entries(categories)
+        .filter(([, v]) => v && v.length > 0)
+        .sort((a, b) => b[1].length - a[1].length)
+        .slice(0, 6);
+
+    const catIconMap = {
+        articles: 'fa-newspaper', videos: 'fa-video', social: 'fa-share-alt',
+        academic: 'fa-graduation-cap', news: 'fa-broadcast-tower',
+        code: 'fa-code', products: 'fa-shopping-bag', other: 'fa-globe'
+    };
+    const catNameMap = {
+        articles: 'مقالات', videos: 'مرئيات', social: 'اجتماعي',
+        academic: 'أبحاث', news: 'أخبار', code: 'برمجة',
+        products: 'منتجات', other: 'أخرى'
+    };
+
+    const catChips = catEntries.map(([k, v]) => `
+        <span class="sv-cat-chip">
+            <i class="fas ${catIconMap[k] || 'fa-globe'}"></i>
+            ${catNameMap[k] || k}
+            <span class="sv-cat-count">${v.length}</span>
+        </span>`).join('');
+
+    const panel = document.createElement('div');
+    panel.className = 'semantic-visual-panel';
+    panel.innerHTML = `
+        <div class="sv-stat-card">
+            <span class="sv-stat-label">المصادر المحللة</span>
+            <span class="sv-stat-value">${total}</span>
+            <span class="sv-stat-sub">${uniqueDomains} نطاق فريد</span>
+        </div>
+        <div class="sv-stat-card">
+            <span class="sv-stat-label">متوسط الصلة</span>
+            <span class="sv-stat-value">${avgPct}<span style="font-size:12px;font-weight:500">%</span></span>
+            <span class="sv-stat-sub">بعد التصفية الدلالية</span>
+        </div>
+        <div class="sv-stat-card">
+            <span class="sv-stat-label">الفئات المكتشفة</span>
+            <span class="sv-stat-value">${catEntries.length}</span>
+            <span class="sv-stat-sub">تصنيف محتوى ذكي</span>
+        </div>
+        <div class="sv-cred-bars">
+            <div class="sv-cred-bars-title"><i class="fas fa-shield-alt" style="margin-left:4px"></i> توزيع مصداقية المصادر</div>
+            <div class="sv-cred-row">
+                <span class="sv-cred-row-label">Tier 1 ⭐</span>
+                <div class="sv-cred-bar-track"><div class="sv-cred-bar-fill t1" style="width:${total ? (t1/total*100).toFixed(0) : 0}%"></div></div>
+                <span class="sv-cred-row-count">${t1}</span>
+            </div>
+            <div class="sv-cred-row">
+                <span class="sv-cred-row-label">Tier 2 ✓</span>
+                <div class="sv-cred-bar-track"><div class="sv-cred-bar-fill t2" style="width:${total ? (t2/total*100).toFixed(0) : 0}%"></div></div>
+                <span class="sv-cred-row-count">${t2}</span>
+            </div>
+            <div class="sv-cred-row">
+                <span class="sv-cred-row-label">Tier 3 ·</span>
+                <div class="sv-cred-bar-track"><div class="sv-cred-bar-fill t3" style="width:${total ? (t3/total*100).toFixed(0) : 0}%"></div></div>
+                <span class="sv-cred-row-count">${t3}</span>
+            </div>
+        </div>
+        ${catEntries.length > 0 ? `<div class="sv-categories">${catChips}</div>` : ''}
+    `;
+    body.appendChild(panel);
+}
+
 // ─── RENDER ANALYSIS PANEL ────────────────────────────────────
 function renderAnalysis(report) {
+
     const analysis = report?.analysis || {};
 
     // Summary
@@ -1316,9 +1683,9 @@ function renderAnalysis(report) {
     }
 
     // ROOTBASE / deep analysis
-    const rootbaseEl = document.getElementById('fuckenbaseContent');
+    const rootbaseEl = document.getElementById('rootbaseContent');
     if (rootbaseEl) {
-        const deep = analysis.deep_analysis || analysis.fuckenbase_analysis || '';
+        const deep = analysis.deep_analysis || analysis.rootbase_analysis || '';
         const thinking = analysis.thinking || '';
         
         let htmlContent = '';
@@ -1363,17 +1730,21 @@ function renderAnalysis(report) {
     const statsEl = document.getElementById('statsContent');
     if (statsEl) {
         const stats = analysis.statistics || {};
+        const catCount  = Object.keys(report.categories || {}).length;
+        const enginesArr = Object.keys(stats.sources_used || {});
+        const searchTimeEl = document.getElementById('searchTime');
         const rows = [
-            ['إجمالي النتائج', report.total_results || 0],
-            ['النتائج الفريدة', report.total_unique || 0],
-            ['التصنيفات', Object.keys(report.categories || {}).join(', ') || '—'],
-            ['المحركات المستخدمة', Object.keys(stats.sources_used || {}).join(', ') || '—'],
-            ['وقت البحث', document.getElementById('searchTime')?.textContent + 'ث' || '—'],
+            ['إجمالي المصادر',    (report.total_results || 0) + ' مصدر'],
+            ['مصادر فريدة',       (report.total_unique  || 0) + ' مصدر'],
+            ['الفئات المعرفية',   catCount  ? catCount + ' فئة'  : '—'],
+            ['محركات البحث',      enginesArr.length ? enginesArr.length + ' محرك' : '—'],
+            ['زمن البحث',         (searchTimeEl?.textContent || '—') + 'ث'],
+            ['الكلمات المحللة',   ((stats.total_words_analyzed || 0).toLocaleString()) + ' كلمة'],
         ];
         statsEl.innerHTML = `<table style="width:100%;border-collapse:collapse">` +
             rows.map(([k, v]) => `<tr>
                 <td style="padding:8px 0;color:var(--text-muted);font-size:13px;border-bottom:1px solid var(--border)">${k}</td>
-                <td style="padding:8px 0;font-size:13px;font-family:'JetBrains Mono',monospace;border-bottom:1px solid var(--border);text-align:end">${escapeHtml(String(v))}</td>
+                <td style="padding:8px 0;font-size:13px;font-weight:600;border-bottom:1px solid var(--border);text-align:end">${escapeHtml(String(v))}</td>
             </tr>`).join('') + '</table>';
     }
 }
@@ -1469,45 +1840,67 @@ function fmtScore(s, fallback = '') {
 }
 
 function resultCardHTML(r, idx) {
+    const score    = fmtScore(r.relevance_score);
+    const src      = (r.source || '').split('|')[0];
+    const wc       = r.metadata && r.metadata.word_count ? (r.metadata.word_count.toLocaleString() + ' كلمة') : '';
+    const scraped  = !!(r.metadata && r.metadata.scraped);
+    const credWt   = r.metadata ? r.metadata.credibility_weight : null;
+    const readMin  = (r.metadata && r.metadata.reading_time)
+        ? r.metadata.reading_time
+        : (r.metadata && r.metadata.word_count ? Math.ceil(r.metadata.word_count / 200) : 0);
 
-    const score = fmtScore(r.relevance_score);
-    const src = (r.source || '').split('|')[0];
-    const wc = r.metadata?.word_count ? `${r.metadata.word_count.toLocaleString()} كلمة` : '';
-    const scraped = r.metadata?.scraped ? '<i class="fas fa-check" style="color:var(--success-text)"></i> تم استخراجه' : '';
-    
-    // Use AI summary if available and different from snippet, else fallback to snippet
+    // Credibility badge
+    var credBadge = '';
+    if (credWt === 1.0) {
+        credBadge = '<span class="rc-cred-badge rc-cred-t1" title="مصدر موثوق Tier 1"><i class="fas fa-shield-alt"></i></span>';
+    } else if (credWt === 0.7) {
+        credBadge = '<span class="rc-cred-badge rc-cred-t2" title="مصدر جيد Tier 2"><i class="fas fa-check-circle"></i></span>';
+    }
+
+    // Content-type icon
+    const catIcons = {
+        articles: 'fa-newspaper', videos: 'fa-video', social: 'fa-share-alt',
+        academic: 'fa-graduation-cap', news: 'fa-broadcast-tower', code: 'fa-code',
+        products: 'fa-shopping-bag', other: 'fa-globe'
+    };
+    const ctIcon = catIcons[r.content_type] || 'fa-globe';
+
+    // AI summary vs raw snippet
     const isAISummary = r.summary && r.summary !== r.snippet && !r.summary.includes('Analysis failed');
     const bodyText = isAISummary ? r.summary : (r.snippet || '');
-    const bodyDecoded = decodeHtml(bodyText);
-    const bodyHighlighted = highlightTerms(escapeHtml(bodyDecoded), currentQuery);
+    const bodyHighlighted = highlightTerms(escapeHtml(decodeHtml(bodyText)), currentQuery);
 
-    return `
-    <article class="result-card" data-category="${r.content_type || 'other'}" onclick="openSourceDetailModal('${getUrlId(r.url)}')">
-        <div class="result-source-row">
-            <span class="result-source-badge">${escapeHtml(decodeHtml(src))}</span>
-            ${score ? `<span class="result-score">${score}</span>` : ''}
-        </div>
-        <h3 class="result-title">
-            <a href="${escapeHtml(r.url)}" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation();">
-                ${escapeHtml(decodeHtml(r.title || 'بدون عنوان'))}
-            </a>
-        </h3>
-        <div class="result-url">${escapeHtml(r.url || '')}</div>
-        <p class="result-snippet">
-            ${isAISummary ? `<span class="ai-summary-badge"><i class="fas fa-sparkles"></i> تلخيص الذكاء الاصطناعي</span>` : ''}
-            ${bodyHighlighted}
-        </p>
-        <div class="result-footer">
-            ${wc ? `<span class="result-meta-tag"><i class="fas fa-file-word"></i> ${wc}</span>` : ''}
-            ${scraped}
-            <button class="result-open-btn" style="margin-inline-start:auto;background:none;border:none;color:var(--accent);font-weight:600;cursor:pointer;display:inline-flex;align-items:center;gap:4px;" onclick="event.stopPropagation(); openSourceDetailModal('${getUrlId(r.url)}')">
-                <i class="fas fa-info-circle"></i> تفاصيل المصدر
-            </button>
-            <a href="${escapeHtml(r.url)}" target="_blank" rel="noopener noreferrer" class="result-open-btn" onclick="event.stopPropagation();">
-                <i class="fas fa-external-link-alt"></i> فتح
-            </a>
-        </div>
-    </article>`;
+    var snippetHTML = isAISummary
+        ? '<div class="rc-ai-summary"><span class="rc-ai-label"><i class="fas fa-sparkles"></i> ملخص الذكاء الاصطناعي</span><p class="result-snippet" style="margin-top:6px">' + bodyHighlighted + '</p></div>'
+        : '<p class="result-snippet">' + bodyHighlighted + '</p>';
+
+    var footerMeta = '';
+    if (wc) footerMeta += '<span class="result-meta-tag"><i class="fas fa-align-left"></i> ' + wc + '</span>';
+    if (readMin) footerMeta += '<span class="result-meta-tag"><i class="fas fa-clock"></i> ' + readMin + ' د قراءة</span>';
+    if (scraped) footerMeta += '<span class="rc-scraped-tag"><i class="fas fa-check"></i> مستخرج</span>';
+
+    return '<article class="result-card" data-category="' + (r.content_type || 'other') + '" onclick="openSourceDetailModal(\'' + getUrlId(r.url) + '\')">'
+        + '<div class="result-source-row">'
+        + '<i class="fas ' + ctIcon + '" style="color:var(--accent);font-size:11px;opacity:0.7"></i> '
+        + '<span class="result-source-badge">' + escapeHtml(decodeHtml(src)) + '</span>'
+        + credBadge
+        + (score ? '<span class="result-score">' + score + '</span>' : '')
+        + '</div>'
+        + '<h3 class="result-title">'
+        + '<a href="' + escapeHtml(r.url) + '" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation();">'
+        + escapeHtml(decodeHtml(r.title || 'بدون عنوان'))
+        + '</a>'
+        + '</h3>'
+        + '<div class="result-url">' + escapeHtml(r.url || '') + '</div>'
+        + snippetHTML
+        + '<div class="result-footer">'
+        + footerMeta
+        + '<button class="result-open-btn" style="margin-inline-start:auto;" onclick="event.stopPropagation(); openSourceDetailModal(\'' + getUrlId(r.url) + '\')">'
+        + '<i class="fas fa-info-circle"></i> تفاصيل</button>'
+        + '<a href="' + escapeHtml(r.url) + '" target="_blank" rel="noopener noreferrer" class="result-open-btn" onclick="event.stopPropagation();">'
+        + '<i class="fas fa-external-link-alt"></i> فتح</a>'
+        + '</div>'
+        + '</article>';
 }
 
 function highlightTerms(text, query) {
@@ -1898,16 +2291,43 @@ function openSourceDetailModal(id) {
 
     openLink.href = r.url;
 
-    const src = (r.source || '').split('|')[0];
-    const score = fmtScore(r.relevance_score, '—');
-    const isScraped = r.metadata?.scraped;
-    const wc = r.metadata?.word_count ? r.metadata.word_count.toLocaleString() : 'غير معروف';
-    const author = r.metadata?.author || 'غير معروف';
-    const publishDate = r.metadata?.publish_date || r.metadata?.date || 'غير معروف';
-    const language = r.metadata?.language || 'غير معروف';
-    const readingTime = r.metadata?.reading_time ? `${r.metadata.reading_time} دقيقة` : (r.metadata?.word_count ? `${Math.ceil(r.metadata.word_count / 200)} دقيقة` : 'غير معروف');
+    const src         = (r.source || '').split('|')[0];
+    const score       = fmtScore(r.relevance_score, '—');
+    const relPct      = r.relevance_score != null
+        ? Math.round(Math.min(1, r.relevance_score) * 100)
+        : null;
+    const isScraped   = r.metadata?.scraped;
+    const wc          = r.metadata?.word_count ? r.metadata.word_count.toLocaleString() : '—';
+    const author      = r.metadata?.author || '—';
+    const publishDate = r.metadata?.publish_date || r.metadata?.date || '—';
+    const language    = r.metadata?.language || '—';
+    const credWt      = r.metadata?.credibility_weight;
+    const credTier    = r.metadata?.credibility_tier || '';
+    const readMin     = r.metadata?.reading_time
+        ? r.metadata.reading_time + ' دقيقة'
+        : (r.metadata?.word_count ? Math.ceil(r.metadata.word_count / 200) + ' دقيقة' : '—');
 
-    // Sentiment and tone analysis if available
+    // Credibility badge
+    let credColor = '#94a3b8', credBg = 'rgba(148,163,184,0.1)', credLabel = 'مصدر عام';
+    if (credWt === 1.0 || credTier === 'Tier 1') {
+        credColor = '#f59e0b'; credBg = 'rgba(245,158,11,0.12)'; credLabel = 'Tier 1 — موثوق';
+    } else if (credWt === 0.7 || credTier === 'Tier 2') {
+        credColor = '#10b981'; credBg = 'rgba(16,185,129,0.1)'; credLabel = 'Tier 2 — جيد';
+    }
+
+    // Relevance bar
+    const relBarHTML = relPct != null ? `
+        <div style="margin-bottom:16px;">
+            <div style="display:flex;justify-content:space-between;font-size:11px;margin-bottom:5px;">
+                <span style="color:var(--text-muted)">نسبة الصلة بالاستعلام</span>
+                <span style="color:var(--accent);font-weight:700">${relPct}%</span>
+            </div>
+            <div style="width:100%;height:5px;background:var(--border);border-radius:10px;overflow:hidden;">
+                <div style="width:${relPct}%;height:100%;background:linear-gradient(90deg,var(--accent),#a78bfa);border-radius:10px;box-shadow:0 0 8px var(--accent)40;transition:width 0.6s ease;"></div>
+            </div>
+        </div>` : '';
+
+    // Sentiment
     let sentimentHTML = '';
     if (r.metadata?.sentiment) {
         sentimentHTML = `<div class="metadata-item">
@@ -1916,14 +2336,14 @@ function openSourceDetailModal(id) {
         </div>`;
     }
 
-    // AI Summary display with marked.js
+    // AI Summary
     let aiSummaryHTML = '';
     if (r.summary && r.summary !== r.snippet && !r.summary.includes('Analysis failed')) {
         aiSummaryHTML = `
             <div class="ai-summary-section">
                 <div class="ai-summary-title">
                     <i class="fas fa-sparkles"></i>
-                    <span>تلخيص الذكاء الاصطناعي المعرفي (AI Summary)</span>
+                    <span>تلخيص الذكاء الاصطناعي المعرفي</span>
                 </div>
                 <div class="ai-summary-content">
                     ${DOMPurify.sanitize(marked.parse(decodeHtml(r.summary)))}
@@ -1932,28 +2352,45 @@ function openSourceDetailModal(id) {
         `;
     }
 
+    // Domain from URL for favicon
+    let domainForFavicon = '';
+    try { domainForFavicon = new URL(r.url).hostname; } catch(_) {}
+    const faviconUrl = domainForFavicon
+        ? `https://www.google.com/s2/favicons?domain=${domainForFavicon}&sz=32`
+        : '';
+
     body.innerHTML = `
-        <div style="margin-bottom:20px;">
+        <!-- Header row -->
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;flex-wrap:wrap;">
+            ${faviconUrl ? `<img src="${faviconUrl}" width="20" height="20" style="border-radius:4px;flex-shrink:0;" onerror="this.style.display='none'" alt="">` : ''}
             <span class="result-source-badge" style="font-size:12px;padding:4px 10px;">${escapeHtml(decodeHtml(src))}</span>
-            <span class="result-score" style="font-size:12px;padding:4px 10px;margin-inline-start:8px;">معدل الصلة: ${score}</span>
-        </div>
-        <h2 style="font-size:18px;margin-bottom:12px;color:var(--text-primary);line-height:1.5;">${escapeHtml(decodeHtml(r.title || 'بدون عنوان'))}</h2>
-        <div style="font-size:12px;color:var(--text-muted);word-break:break-all;margin-bottom:24px;">
-            <i class="fas fa-link"></i> ${escapeHtml(decodeHtml(r.url))}
+            <span style="background:${credBg};color:${credColor};border:1px solid ${credColor}33;padding:2px 8px;border-radius:20px;font-size:10px;font-weight:600;">${credLabel}</span>
+            <span class="result-score" style="font-size:12px;">${score}</span>
+            <button onclick="navigator.clipboard.writeText('${escapeHtml(r.url)}').then(()=>showToast('تم نسخ الرابط','success'))" style="margin-inline-start:auto;background:none;border:1px solid var(--border-mid);color:var(--text-muted);border-radius:var(--r-sm);padding:4px 10px;font-size:11px;cursor:pointer;display:flex;align-items:center;gap:5px;" title="نسخ الرابط">
+                <i class="fas fa-copy"></i> نسخ
+            </button>
         </div>
 
+        <h2 style="font-size:17px;margin-bottom:10px;color:var(--text-primary);line-height:1.5;">${escapeHtml(decodeHtml(r.title || 'بدون عنوان'))}</h2>
+        <div style="font-size:11px;color:var(--accent);word-break:break-all;margin-bottom:18px;opacity:0.8;font-family:'JetBrains Mono',monospace;">
+            ${escapeHtml(decodeHtml(r.url))}
+        </div>
+
+        ${relBarHTML}
         ${aiSummaryHTML}
 
-        <h4 style="font-size:14px;margin-bottom:12px;color:var(--text-primary);"><i class="fas fa-info-circle"></i> البيانات الوصفية (Metadata)</h4>
+        <h4 style="font-size:13px;font-weight:600;margin-bottom:10px;color:var(--text-primary);display:flex;align-items:center;gap:6px;">
+            <i class="fas fa-info-circle" style="color:var(--accent)"></i> البيانات الوصفية
+        </h4>
         <div class="metadata-grid">
             <div class="metadata-item">
-                <span class="metadata-label">محرك البحث المكتشف</span>
+                <span class="metadata-label">محرك البحث</span>
                 <span class="metadata-value" style="color:var(--accent);">${escapeHtml(src.toUpperCase())}</span>
             </div>
             <div class="metadata-item">
-                <span class="metadata-label">حالة سحب المحتوى</span>
-                <span class="metadata-value" style="color:${isScraped ? 'var(--success-text)' : 'var(--error-text)'};">
-                    ${isScraped ? 'تم الاستخراج بنجاح' : 'لم يتم الاستخراج'}
+                <span class="metadata-label">استخراج المحتوى</span>
+                <span class="metadata-value" style="color:${isScraped ? 'var(--success-text)' : 'var(--text-muted)'};">
+                    ${isScraped ? '<i class="fas fa-check-circle"></i> مستخرج' : '<i class="fas fa-times-circle"></i> غير مستخرج'}
                 </span>
             </div>
             <div class="metadata-item">
@@ -1961,8 +2398,8 @@ function openSourceDetailModal(id) {
                 <span class="metadata-value">${wc} كلمة</span>
             </div>
             <div class="metadata-item">
-                <span class="metadata-label">زمن القراءة المتوقع</span>
-                <span class="metadata-value">${readingTime}</span>
+                <span class="metadata-label">زمن القراءة</span>
+                <span class="metadata-value">${readMin}</span>
             </div>
             <div class="metadata-item">
                 <span class="metadata-label">الكاتب / المؤلف</span>
@@ -1974,14 +2411,16 @@ function openSourceDetailModal(id) {
             </div>
             <div class="metadata-item">
                 <span class="metadata-label">اللغة</span>
-                <span class="metadata-value">${escapeHtml(decodeHtml(language.toUpperCase()))}</span>
+                <span class="metadata-value">${escapeHtml(String(language).toUpperCase())}</span>
             </div>
             ${sentimentHTML}
         </div>
 
-        <h4 style="font-size:14px;margin-bottom:12px;color:var(--text-primary);"><i class="fas fa-quote-right"></i> مقتطف النص (Search Snippet)</h4>
-        <div style="background:var(--bg-surface);border:1px solid var(--border);border-radius:var(--r-md);padding:16px;font-size:13px;line-height:1.7;color:var(--text-secondary);">
-            ${highlightTerms(escapeHtml(decodeHtml(r.snippet || '')), currentQuery)}
+        <h4 style="font-size:13px;font-weight:600;margin:18px 0 10px;color:var(--text-primary);display:flex;align-items:center;gap:6px;">
+            <i class="fas fa-quote-right" style="color:var(--accent)"></i> مقتطف النص
+        </h4>
+        <div style="background:var(--bg-surface);border:1px solid var(--border);border-radius:var(--r-md);padding:14px;font-size:13px;line-height:1.75;color:var(--text-secondary);direction:rtl;text-align:right;">
+            ${highlightTerms(escapeHtml(decodeHtml(r.snippet || 'لا يوجد مقتطف.')), currentQuery)}
         </div>
     `;
 
@@ -2134,688 +2573,399 @@ function exportAsText() {
     const sentiment     = analysis.sentiment_overview || {};
     const keywords      = analysis.keywords || analysis.top_keywords || [];
     const results       = report.results || [];
-    // Build categorized links check to prevent orphaned sources
     const rawCategories = report.categories || {};
     const categories    = JSON.parse(JSON.stringify(rawCategories));
     const categorizedUrls = new Set();
     Object.values(categories).forEach(arr => {
-        if (Array.isArray(arr)) {
-            arr.forEach(r => { if (r.url) categorizedUrls.add(r.url); });
-        }
+        if (Array.isArray(arr)) arr.forEach(r => { if (r.url) categorizedUrls.add(r.url); });
     });
     const uncategorized = results.filter(r => !categorizedUrls.has(r.url));
     if (uncategorized.length > 0) {
         const otherKey = 'أخرى (OTHER)';
         if (!categories[otherKey]) categories[otherKey] = [];
-        // Add unique items to prevent duplicate records
         uncategorized.forEach(u => {
-            if (!categories[otherKey].some(x => x.url === u.url)) {
-                categories[otherKey].push(u);
-            }
+            if (!categories[otherKey].some(x => x.url === u.url)) categories[otherKey].push(u);
         });
     }
-    const searchPath    = report.search_path || report.live_log || [];
-    const deepAnalysis  = analysis.deep_analysis || analysis.aggregated_report || "";
-    const entities      = analysis.entities || {};
-    const topics        = analysis.topics || analysis.clusters || [];
+    const searchPath   = report.search_path || report.live_log || [];
+    const deepAnalysis = analysis.deep_analysis || analysis.aggregated_report || '';
+    const entities     = analysis.entities || {};
+    const topics       = analysis.topics || analysis.clusters || [];
 
-    // ─── PURE ASCII HELPERS (no Arabic inside pad calculations) ───────────────
-    const W = 90; // total line width
+    // ── Separator constants ─────────────────────────────────────────────────────
+    const SEP  = '═'.repeat(72);
+    const SEP2 = '─'.repeat(72);
 
-    // Repeat a char N times
-    const rep = (ch, n) => ch.repeat(Math.max(0, n));
-
-    // Left-pad or right-pad a string to exactly `len` spaces (BYTE-safe: counts chars not bytes)
-    const padR = (s, len) => { s = String(s); return s + rep(' ', Math.max(0, len - s.length)); };
-    const padL = (s, len) => { s = String(s); return rep(' ', Math.max(0, len - s.length)) + s; };
-    const padC = (s, len) => {
-        s = String(s);
-        const total = Math.max(0, len - s.length);
-        const l = Math.floor(total / 2);
-        return rep(' ', l) + s + rep(' ', total - l);
+    // ── Text cleaning: strips HTML, markdown, URLs, junk chars ──────────────────
+    const cleanText = (raw) => {
+        if (!raw) return '';
+        return String(raw)
+            // Decode common HTML entities
+            .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+            .replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&nbsp;/g, ' ')
+            // Strip markdown bold/italic
+            .replace(/\*{1,3}([^*]+)\*{1,3}/g, '$1')
+            // Strip markdown headers
+            .replace(/^#{1,6}\s*/gm, '')
+            // Strip inline code
+            .replace(/`([^`]+)`/g, '$1')
+            // Strip bare URLs (http...)
+            .replace(/https?:\/\/\S+/g, '')
+            // Strip leftover html tags
+            .replace(/<[^>]+>/g, '')
+            // Remove binary-looking sequences (non-printable)
+            .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '')
+            // Collapse multiple spaces/newlines
+            .replace(/[ \t]+/g, ' ')
+            .replace(/\n{3,}/g, '\n\n')
+            .trim();
     };
 
-    // A full double-border line
-    const dbl   = () => rep('═', W) + '\n';
-    const sgl   = () => rep('─', W) + '\n';
-    const bold  = () => rep('━', W) + '\n';
-
-    // Box line: │ <content padded to W-4> │
-    const row = (content) => {
-        const inner = W - 4;
-        const s = String(content);
-        // If content longer than inner, hard-wrap
-        if (s.length <= inner) return `│ ${padR(s, inner)} │\n`;
-        // word-wrap
+    // Safe text wrap: breaks on spaces, preserves Arabic direction
+    const wrap = (text, prefix, w) => {
+        prefix = prefix || '  ';
+        w = w || 70;
+        const cleaned = cleanText(text);
+        if (!cleaned) return '';
+        // Split into paragraphs first, then wrap each
+        const paragraphs = cleaned.split(/\n\n+/);
         let out = '';
-        const words = s.split(' ');
-        let line = '';
-        words.forEach(w => {
-            if ((line + w).length > inner) {
-                out += `│ ${padR(line.trimEnd(), inner)} │\n`;
-                line = w + ' ';
-            } else {
-                line += w + ' ';
+        for (const para of paragraphs) {
+            const words = para.replace(/\n/g, ' ').split(' ').filter(Boolean);
+            let line = '';
+            for (const word of words) {
+                if (line && (line.length + word.length + 1) > w) {
+                    out += prefix + line.trimEnd() + '\n';
+                    line = word + ' ';
+                } else {
+                    line += word + ' ';
+                }
             }
-        });
-        if (line.trim()) out += `│ ${padR(line.trimEnd(), inner)} │\n`;
-        return out;
+            if (line.trim()) out += prefix + line.trimEnd() + '\n';
+            out += '\n'; // blank line between paragraphs
+        }
+        return out.trimEnd() + '\n';
     };
 
-    // Section header (double border)
-    const sectionHeader = (label) =>
-        `╔${rep('═', W - 2)}╗\n│ ${padR(label, W - 4)} │\n╚${rep('═', W - 2)}╝\n`;
+    const sec = (num, label) =>
+        '\n' + SEP + '\n  [' + num + ']  ' + label + '\n' + SEP + '\n';
 
-    // Sub-header (single border)
-    const subHeader = (label) =>
-        `┌${rep('─', W - 2)}┐\n│ ${padC(label, W - 4)} │\n└${rep('─', W - 2)}┘\n`;
+    const subSec = (label) =>
+        '\n  ── ' + label + ' ──\n  ' + SEP2 + '\n';
 
-    // Simple ASCII bar (10 blocks)
-    const bar = (val, max = 1.0) => {
-        const pct = Math.max(0, Math.min(100, Math.round((val / max) * 100)));
+    const fmtScore = (val, fallback) => {
+        if (val == null || isNaN(val)) return fallback || '—';
+        const n = Number(val);
+        return (n <= 1.0 ? (n * 100).toFixed(0) : n.toFixed(1)) + '%';
+    };
+
+    // Simple ASCII bar, no Arabic strings inside calculations
+    const bar = (val) => {
+        const pct = Math.max(0, Math.min(100, Math.round((val || 0) * 100)));
         const filled = Math.round(pct / 10);
-        return `[${'█'.repeat(filled)}${'░'.repeat(10 - filled)}] ${padL(pct + '%', 4)}`;
+        return '[' + '█'.repeat(filled) + '░'.repeat(10 - filled) + '] ' + pct + '%';
     };
 
-    // Wrap long text into lines of max `w` chars, each prefixed with `prefix`
-    const wrapText = (text, prefix = '', w = W - 6) => {
-        if (!text) return '';
-        const words = String(text).replace(/\s+/g, ' ').split(' ');
-        let out = '', line = '';
-        words.forEach(word => {
-            if ((line + word).length > w) {
-                out += prefix + line.trimEnd() + '\n';
-                line = word + ' ';
-            } else {
-                line += word + ' ';
-            }
-        });
-        if (line.trim()) out += prefix + line.trimEnd() + '\n';
-        return out;
-    };
 
-    // ─── KEY DATA ─────────────────────────────────────────────────────────────
-    const queryStr    = report.query || '—';
-    const totalRes    = results.length;
-    const uniqueRes   = new Set(results.map(r => r.url)).size;
-    const searchTime  = report.elapsed_time || report.search_time || '—';
-    const modelName   = report.model === 'fathom_max'
-        ? 'Fathom Max — التنقيب العميق المتقدم'
-        : 'Fathom S1 — البحث البرقي السريع';
-    const timestamp   = new Date(report.timestamp || Date.now()).toLocaleString('ar-EG', {
+    // ── Key data ───────────────────────────────────────────────────────────────
+    const queryStr   = report.query || '—';
+    const totalRes   = results.length;
+    const uniqueRes  = new Set(results.map(r => r.url)).size;
+    const searchTime = report.elapsed_time || report.search_time || '—';
+    const modelName  = report.model === 'fathom_max'
+        ? 'Fathom Max — التنقيب العميق'
+        : 'Fathom S1  — البحث البرقي';
+    const timestamp  = new Date(report.timestamp || Date.now()).toLocaleString('ar-EG', {
         weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
-        hour: '2-digit', minute: '2-digit', second: '2-digit'
+        hour: '2-digit', minute: '2-digit'
     });
     const enginesUsed = [...new Set(results.map(r => r.source).filter(Boolean))];
     const _rawAvg = stats.average_relevance
         || (results.length > 0
             ? results.reduce((s, r) => s + (r.relevance_score || 0), 0) / results.length
             : null);
-    const avgRel = _rawAvg == null
-        ? '—'
-        : (_rawAvg <= 1.0
-            ? (_rawAvg * 100).toFixed(1) + '%'
-            : _rawAvg.toFixed(4) + ' (نقاط دلالية)');
-    const totalWords  = stats.total_words_analyzed || 0;
+    const avgRel = _rawAvg == null ? '—'
+        : (_rawAvg <= 1.0 ? (_rawAvg * 100).toFixed(1) + '%' : _rawAvg.toFixed(4));
+    const totalWords = stats.total_words_analyzed || 0;
 
     let text = '';
 
-    // ═══════════════════════════════════════════════════════════════════════════
-    //   HEADER BRAND BLOCK
-    // ═══════════════════════════════════════════════════════════════════════════
-    text += dbl();
-    text += '  ██████╗  ██████╗  ██████╗ ████████╗███████╗███████╗ █████╗ ██████╗  ██████╗██╗  ██╗\n';
-    text += '  ██╔══██╗██╔═══██╗██╔═══██╗╚══██╔══╝██╔════╝██╔════╝██╔══██╗██╔══██╗██╔════╝██║  ██║\n';
-    text += '  ██████╔╝██║   ██║██║   ██║   ██║   ███████╗█████╗  ███████║██████╔╝██║     ███████║\n';
-    text += '  ██╔══██╗██║   ██║██║   ██║   ██║   ╚════██║██╔══╝  ██╔══██║██╔══██╗██║     ██╔══██║\n';
-    text += '  ██║  ██║╚██████╔╝╚██████╔╝   ██║   ███████║███████╗██║  ██║██║  ██║╚██████╗██║  ██║\n';
-    text += '  ╚═╝  ╚═╝ ╚═════╝  ╚═════╝    ╚═╝   ╚══════╝╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝╚═╝  ╚═╝\n';
-    text += `  Deep Cognitive Search & Analysis System — Demo 1 T   |   نظام البحث والتحليل المعرفي العميق\n`;
-    text += dbl() + '\n';
+    // ══ HEADER ════════════════════════════════════════════════════════════════
+    text += SEP + '\n';
+    text += '  ROOTSEARCH — نظام البحث والتحليل المعرفي العميق\n';
+    text += '  Deep Cognitive Search & Analysis System — Demo 1 T\n';
+    text += SEP + '\n\n';
 
-    // ═══════════════════════════════════════════════════════════════════════════
-    //   TABLE OF CONTENTS
-    // ═══════════════════════════════════════════════════════════════════════════
-    text += subHeader('جَدْوَلُ المُحْتَوَيَاتِ  —  Table of Contents');
-    text += `  [١]  البيانات المرجعية ومقاييس البحث\n`;
-    text += `  [٢]  الملخص التنفيذي (إجابة الذكاء الاصطناعي الفورية)\n`;
-    text += `  [٣]  التحليل المعرفي العميق — ROOTBASE\n`;
-    text += `  [٤]  تحليل المشاعر والنبرة الوجدانية للمصادر\n`;
-    text += `  [٥]  جدول المفاهيم والكلمات المفتاحية الإحصائي\n`;
-    text += `  [٦]  التوزيع السياقي والجغرافي للمفاهيم\n`;
-    text += `  [٧]  تصنيف المصادر حسب النطاق والفئة\n`;
-    text += `  [٨]  قائمة المراجع الكاملة بالتفصيل\n`;
-    text += `  [٩]  سجل مسار عملية البحث الحي\n`;
-    text += `  [١٠] خريطة الترابط المعرفي والطوبولوجيا الهيكلية\n`;
-    text += '\n\n';
+    // ══ SECTION 1: SEARCH METRICS ═════════════════════════════════════════════
+    text += sec('١', 'البيانات المرجعية ومقاييس البحث');
+    text += '  الاستعلام         : ' + queryStr + '\n';
+    text += '  تاريخ التقرير     : ' + timestamp + '\n';
+    text += '  نموذج البحث       : ' + modelName + '\n';
+    text += '  ' + SEP2 + '\n';
+    text += '  إجمالي المصادر    : ' + totalRes + ' مصدر  |  فريد: ' + uniqueRes + '\n';
+    text += '  محركات البحث      : ' + (enginesUsed.join(' • ') || '—') + '\n';
+    text += '  زمن البحث         : ' + searchTime + 'ث\n';
+    text += '  متوسط درجة الصلة  : ' + avgRel + '\n';
+    text += '  إجمالي الكلمات    : ' + totalWords.toLocaleString() + ' كلمة\n\n';
 
-    // ═══════════════════════════════════════════════════════════════════════════
-    //   SECTION 1: SEARCH METRICS
-    // ═══════════════════════════════════════════════════════════════════════════
-    text += sectionHeader('[قسم ١]  البيانات المرجعية ومقاييس البحث');
-    text += `╔${rep('═', W - 2)}╗\n`;
-    text += row(`الاستعلام        : "${queryStr}"`);
-    text += row(`تاريخ التقرير    : ${timestamp}`);
-    text += row(`نموذج البحث      : ${modelName}`);
-    text += `╠${rep('═', W - 2)}╣\n`;
-    text += row(`إجمالي المصادر   : ${totalRes} مصدر مُتتبَّع  |  فريد: ${uniqueRes} مصدر`);
-    text += row(`المحركات المُستخدمة: ${enginesUsed.join('  •  ') || '—'}`);
-    text += row(`زمن البحث الكلي  : ${searchTime}ث`);
-    text += row(`متوسط درجة الصلة : ${avgRel}`);
-    text += row(`إجمالي الكلمات   : ${totalWords.toLocaleString()} كلمة تم تحليلها دلالياً`);
-    text += `╚${rep('═', W - 2)}╝\n\n\n`;
-
-    // ═══════════════════════════════════════════════════════════════════════════
-    //   SECTION 2: AI QUICK ANSWER / EXECUTIVE SUMMARY
-    // ═══════════════════════════════════════════════════════════════════════════
-    text += sectionHeader('[قسم ٢]  الملخص التنفيذي — إجابة الذكاء الاصطناعي الفورية');
-    const aiAnswer = analysis.quick_answer
-        || analysis.ai_answer
-        || analysis.direct_answer?.answer
-        || null;
-    const summaryText = analysis.summary || analysis.executive_summary || '';
-
+    // ══ SECTION 2: AI QUICK ANSWER ════════════════════════════════════════════
+    text += sec('٢', 'الملخص التنفيذي — إجابة الذكاء الاصطناعي');
+    const aiAnswer   = analysis.quick_answer || analysis.ai_answer
+        || (analysis.direct_answer && analysis.direct_answer.answer) || null;
+    const summaryTxt = analysis.summary || analysis.executive_summary || '';
     if (aiAnswer) {
-        text += `  [إجابة مباشرة]\n`;
-        text += wrapText(aiAnswer, '  ');
+        text += '  [إجابة مباشرة]\n';
+        text += wrap(aiAnswer);
         text += '\n';
     }
-    if (summaryText && summaryText !== aiAnswer) {
-        text += `  [الملخص الشامل]\n`;
-        text += wrapText(summaryText, '  ');
+    if (summaryTxt && summaryTxt !== aiAnswer) {
+        text += '  [الملخص الشامل]\n';
+        text += wrap(summaryTxt);
     }
-    if (!aiAnswer && !summaryText) {
-        text += '  لم يتوفر ملخص ذكاء اصطناعي لهذا البحث.\n';
+    if (!aiAnswer && !summaryTxt) {
+        text += '  لم يتوفر ملخص لهذا البحث.\n';
     }
-    text += '\n\n';
+    text += '\n';
 
-    // ═══════════════════════════════════════════════════════════════════════════
-    //   SECTION 3: ROOTBASE DEEP ANALYSIS
-    // ═══════════════════════════════════════════════════════════════════════════
-    text += sectionHeader('[قسم ٣]  التحليل المعرفي العميق — ROOTBASE');
+    // ══ SECTION 3: DEEP ANALYSIS ══════════════════════════════════════════════
+    text += sec('٣', 'التحليل المعرفي العميق — ROOTBASE');
     if (deepAnalysis && deepAnalysis.trim().length > 50) {
-        // Strip any markdown formatting characters cleanly
         const cleaned = deepAnalysis
-            .replace(/#{1,6}\s*/g, '')          // remove markdown headers
-            .replace(/\*\*(.+?)\*\*/g, '[$1]')  // bold → brackets
-            .replace(/\*(.+?)\*/g, '$1')         // italic → plain
-            .replace(/>\s*/g, '  >> ')           // blockquote
-            .replace(/\n{3,}/g, '\n\n');         // max 2 blank lines
-        text += wrapText(cleaned.trim(), '  ');
+            .replace(/#{1,6}\s*/g, '')
+            .replace(/\*\*(.+?)\*\*/g, '[$1]')
+            .replace(/\*(.+?)\*/g, '$1')
+            .replace(/>\s*/g, '  >> ')
+            .replace(/\n{3,}/g, '\n\n');
+        text += wrap(cleaned.trim());
     } else {
-        // Dynamic Inductive Synthesis Fallback
-        text += '  التحليل الاستقرائي التركيبي للمصادر النشطة (Dynamic Inductive Analysis):\n';
-        text += '  ' + rep('╍', W - 4) + '\n';
-        text += '  تم استخلاص هذا التحليل الهيكلي تلقائياً من تقاطع البيانات المستخرجة للمصادر المتوفرة:\n\n';
-        
-        const catKeysForFallback = Object.keys(categories).filter(c => categories[c]?.length > 0);
-        if (catKeysForFallback.length > 0) {
-            catKeysForFallback.forEach(cat => {
-                text += `  ◄ تصنيف الفئة المعرفية [${cat.toUpperCase()}]:\n`;
-                const srcs = categories[cat].slice(0, 2);
-                srcs.forEach((src, sIdx) => {
-                    const summary = src.ai_summary || src.summary || src.snippet || 'لا يتوفر مقتطف دلالي حالياً.';
-                    text += `     (${sIdx + 1}) مصدر: "${src.title || src.url}"\n`;
-                    text += wrapText(`         الخلاصة المرجعية: ${summary.trim()}`, '         ');
-                    text += '\n';
+        const catKF = Object.keys(categories).filter(c => categories[c] && categories[c].length > 0);
+        if (catKF.length > 0) {
+            catKF.forEach(cat => {
+                text += '\n  ◄ فئة [' + cat + ']:\n';
+                categories[cat].slice(0, 2).forEach((src, i) => {
+                    const summary = src.ai_summary || src.summary || src.snippet || '';
+                    text += '    (' + (i + 1) + ') ' + (src.title || src.url) + '\n';
+                    if (summary.trim()) text += wrap(summary.trim(), '        ');
                 });
             });
         } else {
-            text += '  لا توجد مصادر مرجعية مصنفة كافية لصياغة التحليل الاستقرائي.\n';
+            text += '  لا توجد بيانات تحليل معرفي متوفرة.\n';
         }
     }
-    text += '\n\n';
+    text += '\n';
 
-    // Topics / clusters if available
+    // Topics
     if (topics && topics.length > 0) {
-        text += subHeader('المحاور الموضوعية المكتشفة');
+        text += subSec('المحاور الموضوعية المكتشفة');
         topics.forEach((t, i) => {
-            const label  = t.label || t.topic || `محور ${i + 1}`;
-            const count  = t.count || t.size || 0;
-            const desc   = t.description || t.summary || '';
-            text += `  [${i + 1}] ${label}  (${count} مصدر)\n`;
-            if (desc) text += wrapText(desc, '      ');
+            const label = t.label || t.topic || ('محور ' + (i + 1));
+            const count = t.count || t.size || 0;
+            text += '  [' + (i + 1) + '] ' + label + '  (' + count + ' مصدر)\n';
+            if (t.description || t.summary) text += wrap(t.description || t.summary, '      ');
         });
         text += '\n';
     }
 
-    // Named entities if available
-    const entryTypes = { people: 'الأشخاص', orgs: 'المنظمات', places: 'الأماكن', dates: 'التواريخ', concepts: 'المفاهيم' };
-    let hasEntities = false;
-    for (const key of Object.keys(entryTypes)) {
-        if (entities[key] && entities[key].length > 0) { hasEntities = true; break; }
-    }
-    if (hasEntities) {
-        text += subHeader('الكيانات المُستخرجة (Named Entities)');
-        for (const [key, label] of Object.entries(entryTypes)) {
+    // Named entities
+    const entryTypes = {
+        persons: 'الأشخاص', organizations: 'المنظمات',
+        locations: 'الأماكن', dates: 'التواريخ'
+    };
+    const hasEnts = Object.keys(entryTypes).some(k => entities[k] && entities[k].length > 0);
+    if (hasEnts) {
+        text += subSec('الكيانات المستخرجة');
+        for (const key of Object.keys(entryTypes)) {
             const list = entities[key] || [];
             if (list.length > 0) {
-                text += `  ${label}: ${list.slice(0, 20).join('  •  ')}\n`;
+                text += '  ' + entryTypes[key] + ': ' + list.slice(0, 15).join(' • ') + '\n';
             }
         }
         text += '\n';
     }
-    text += '\n';
 
-    // ═══════════════════════════════════════════════════════════════════════════
-    //   SECTION 4: SENTIMENT ANALYSIS
-    // ═══════════════════════════════════════════════════════════════════════════
-    text += sectionHeader('[قسم ٤]  تحليل المشاعر والنبرة الوجدانية للمصادر');
+    // ══ SECTION 4: SENTIMENT ══════════════════════════════════════════════════
+    text += sec('٤', 'تحليل المشاعر والنبرة الوجدانية');
     if (sentiment && sentiment.overall) {
-        text += `╔${rep('═', W - 2)}╗\n`;
-        text += row(`النبرة السائدة     : ${sentiment.overall}`);
         const obj  = sentiment.objectivity  || 0;
         const subj = sentiment.subjectivity || 0;
         const pos  = sentiment.positive     || 0;
         const neg  = sentiment.negative     || 0;
         const neu  = sentiment.neutral      || 0;
-        text += `╠${rep('═', W - 2)}╣\n`;
-        text += row(`الموضوعية         : ${(obj  * 100).toFixed(1)}%   ${bar(obj)}`);
-        text += row(`الذاتية           : ${(subj * 100).toFixed(1)}%   ${bar(subj)}`);
+        text += '  النبرة السائدة     : ' + sentiment.overall + '\n';
+        text += '  الموضوعية          : ' + bar(obj) + '\n';
+        text += '  الذاتية            : ' + bar(subj) + '\n';
         if (pos || neg || neu) {
-            text += `╠${rep('═', W - 2)}╣\n`;
-            text += row(`المشاعر الإيجابية : ${(pos * 100).toFixed(1)}%   ${bar(pos)}`);
-            text += row(`المشاعر السلبية   : ${(neg * 100).toFixed(1)}%   ${bar(neg)}`);
-            text += row(`المشاعر المحايدة  : ${(neu * 100).toFixed(1)}%   ${bar(neu)}`);
+            text += '  إيجابي             : ' + bar(pos) + '\n';
+            text += '  سلبي               : ' + bar(neg) + '\n';
+            text += '  محايد              : ' + bar(neu) + '\n';
         }
-        const emotions = sentiment.emotions || {};
-        const emoMap = { trust:'الثقة', joy:'الفرح/الرضا', anticipation:'التوقع', surprise:'المفاجأة', anger:'الغضب', fear:'الخوف', sadness:'الحزن', disgust:'الاشمئزاز' };
-        const foundEmotions = Object.entries(emoMap).filter(([k]) => emotions[k] != null);
-        if (foundEmotions.length > 0) {
-            text += `╠${rep('═', W - 2)}╣\n`;
-            text += row('توزيع المشاعر الأساسية (Plutchik Wheel):');
-            foundEmotions.forEach(([k, name]) => {
-                const val = emotions[k] || 0;
-                if (val > 0) text += row(`  ${padR(name, 16)} : ${(val * 100).toFixed(1)}%   ${bar(val)}`);
+        const emoMap = {
+            trust: 'الثقة', joy: 'الرضا', anticipation: 'التوقع',
+            surprise: 'المفاجأة', anger: 'الغضب', fear: 'الخوف',
+            sadness: 'الحزن', disgust: 'الاشمئزاز'
+        };
+        const emos = sentiment.emotions || {};
+        const foundEmos = Object.keys(emoMap).filter(k => emos[k] > 0);
+        if (foundEmos.length > 0) {
+            text += '  ' + SEP2 + '\n  المشاعر الأساسية:\n';
+            foundEmos.forEach(k => {
+                text += '  ' + emoMap[k] + ': ' + bar(emos[k]) + '\n';
             });
         }
-        text += `╚${rep('═', W - 2)}╝\n\n\n`;
+        text += '\n';
     } else {
-        text += '  لم يتوفر تحليل وجداني للمصادر في بيانات هذا الاستعلام.\n\n\n';
+        text += '  لم يتوفر تحليل وجداني للمصادر.\n\n';
     }
 
-    // ═══════════════════════════════════════════════════════════════════════════
-    //   SECTION 5: KEYWORDS TABLE
-    // ═══════════════════════════════════════════════════════════════════════════
-    text += sectionHeader('[قسم ٥]  جدول المفاهيم والكلمات المفتاحية الإحصائي');
+    // ══ SECTION 5: KEYWORDS TABLE ═════════════════════════════════════════════
+    text += sec('٥', 'الكلمات المفتاحية والمفاهيم الإحصائية');
     if (keywords.length > 0) {
-
-        // Column widths (total = W)
-        const C1=4, C2=28, C3=12, C4=12, C5=12, C6=14; // 4+28+12+12+12+14 = 82  + 7 dividers = 89 ≈ W
-        const hdr = `│ ${padR('رقم',C1)} │ ${padR('المفهوم / الكلمة',C2)} │ ${padR('التكرار',C3)} │ ${padR('الكثافة',C4)} │ ${padR('المصادر',C5)} │ ${padR('الترتيب',C6)} │`;
-        const divTop = `┌${rep('─',C1+2)}┬${rep('─',C2+2)}┬${rep('─',C3+2)}┬${rep('─',C4+2)}┬${rep('─',C5+2)}┬${rep('─',C6+2)}┐`;
-        const divMid = `├${rep('─',C1+2)}┼${rep('─',C2+2)}┼${rep('─',C3+2)}┼${rep('─',C4+2)}┼${rep('─',C5+2)}┼${rep('─',C6+2)}┤`;
-        const divBot = `└${rep('─',C1+2)}┴${rep('─',C2+2)}┴${rep('─',C3+2)}┴${rep('─',C4+2)}┴${rep('─',C5+2)}┴${rep('─',C6+2)}┘`;
-
-        text += divTop + '\n' + hdr + '\n' + divMid + '\n';
-
+        text += '  #    المفهوم                          التكرار    المصادر    الكثافة\n';
+        text += '  ' + SEP2 + '\n';
         keywords.forEach((kw, idx) => {
             const isObj = typeof kw === 'object' && kw !== null;
-            const word   = isObj ? (kw.word || '—') : String(kw);
-            const freq   = isObj ? String(kw.frequency   || '—') : '—';
-            const dens   = isObj ? String(kw.density     || '—') : '—';
-            const sites  = isObj ? String(kw.sites_count || '—') : '—';
-            const rank   = padL(String(idx + 1), 4);
-            text += `│ ${padR(rank,C1)} │ ${padR(word,C2)} │ ${padR(freq,C3)} │ ${padR(dens,C4)} │ ${padR(sites,C5)} │ ${padR('#' + (idx+1),C6)} │\n`;
-            if (idx < keywords.length - 1) text += divMid + '\n';
+            const word  = isObj ? (kw.word  || '—') : String(kw);
+            const freq  = isObj ? (kw.frequency   || '—') : '—';
+            const sites = isObj ? (kw.sites_count || '—') : '—';
+            const dens  = isObj ? (kw.density     || '—') : '—';
+            const num   = String(idx + 1);
+            text += '  ' + num + '    ' + word + '\n';
+            text += '       التكرار: ' + freq + '  |  المصادر: ' + sites + '  |  الكثافة: ' + dens + '\n';
         });
-        text += divBot + '\n\n\n';
+        text += '\n';
     } else {
-        text += '  لم يتم رصد كلمات مفتاحية إحصائية كافية لتوليد الجدول المعرفي.\n\n\n';
+        text += '  لم يتم رصد كلمات مفتاحية كافية.\n\n';
     }
 
-    // ═══════════════════════════════════════════════════════════════════════════
-    //   SECTION 6: KEYWORD CONTEXTS & DISTRIBUTION
-    // ═══════════════════════════════════════════════════════════════════════════
-    text += sectionHeader('[قسم ٦]  التوزيع السياقي والجغرافي للمفاهيم');
-    const kwWithContext = keywords.filter(k => typeof k === 'object' && k !== null && ((k.distribution && k.distribution.length > 0) || (k.contexts && k.contexts.length > 0)));
-    if (kwWithContext.length > 0) {
-
-        kwWithContext.forEach((kw, idx) => {
-            text += `  ┌─── [${idx + 1}] المفهوم: "${kw.word}"  (${kw.frequency || 0} تكرار — ${kw.sites_count || 0} مصدر)\n`;
-
+    // ══ SECTION 6: KEYWORD CONTEXT DISTRIBUTION ════════════════════════════════
+    text += sec('٦', 'التوزيع السياقي للمفاهيم');
+    const kwWithCtx = keywords.filter(k => typeof k === 'object' && k !== null &&
+        ((k.distribution && k.distribution.length > 0) || (k.contexts && k.contexts.length > 0)));
+    if (kwWithCtx.length > 0) {
+        kwWithCtx.forEach((kw, idx) => {
+            text += '\n  [' + (idx + 1) + '] "' + kw.word + '"  —  '
+                + (kw.frequency || 0) + ' تكرار، ' + (kw.sites_count || 0) + ' مصدر\n';
             if (kw.distribution && kw.distribution.length > 0) {
-                text += `  │   التوزيع على المصادر:\n`;
-                kw.distribution.slice(0, 8).forEach(d => {
-                    const dots = rep('.', Math.max(2, 50 - String(d.site || '').length));
-                    text += `  │     • ${d.site || '—'} ${dots} ${d.count} ظهور\n`;
+                text += '  توزيع المصادر:\n';
+                kw.distribution.slice(0, 6).forEach(d => {
+                    text += '    • ' + (d.site || '—') + ' — ' + d.count + ' ظهور\n';
                 });
             }
-
             if (kw.contexts && kw.contexts.length > 0) {
-                text += `  │   السياقات الدلالية الحية:\n`;
-                kw.contexts.slice(0, 5).forEach((c, ci) => {
-                    const isLast = ci === Math.min(4, kw.contexts.length - 1);
-                    const branch = isLast ? '  └──' : '  ├──';
-                    text += `  │  ${branch} "...${c.trim()}..."\n`;
+                text += '  سياقات دلالية:\n';
+                kw.contexts.slice(0, 3).forEach(c => {
+                    text += wrap('"...' + c.trim() + '..."', '    ');
                 });
             }
-            text += '  └' + rep('─', W - 4) + '\n\n';
+            text += '  ' + SEP3 + '\n';
         });
     } else {
-        text += '  لا توجد بيانات توزيع سياقي للمفاهيم.\n\n\n';
+        text += '  لا توجد بيانات توزيع سياقي.\n\n';
     }
 
-    // ═══════════════════════════════════════════════════════════════════════════
-    //   SECTION 7: CATEGORIES TREE
-    // ═══════════════════════════════════════════════════════════════════════════
-    text += sectionHeader('[قسم ٧]  تصنيف المصادر حسب النطاق والفئة');
-    const catEntries = Object.entries(categories).filter(([, v]) => Array.isArray(v) && v.length > 0);
+    // ══ SECTION 7: CATEGORIES TREE ════════════════════════════════════════════
+    text += sec('٧', 'تصنيف المصادر حسب الفئة');
+    const catEntries = Object.entries(categories).filter(function(e) {
+        return Array.isArray(e[1]) && e[1].length > 0;
+    });
     if (catEntries.length > 0) {
-
-        catEntries.forEach(([catName, catResults]) => {
-            text += `\n  [الفئة: ${catName.toUpperCase()}]  —  ${catResults.length} مصدر\n`;
+        catEntries.forEach(function(entry) {
+            const catName = entry[0];
+            const catResults = entry[1];
+            text += '\n  [' + catName + ']  —  ' + catResults.length + ' مصدر\n';
             catResults.forEach((r, idx) => {
-                const isLast  = idx === catResults.length - 1;
-                const branch  = isLast ? '  └── ' : '  ├── ';
-                const indent  = isLast ? '       ' : '  │    ';
-                const relPct  = fmtScore(r.relevance_score, '—');
-                text += `${branch}${r.title || r.url} [${r.source || '—'} | صلة: ${relPct}]\n`;
-                text += `${indent}${r.url || '—'}\n`;
+                const isLast = idx === catResults.length - 1;
+                const branch = isLast ? '  └── ' : '  ├── ';
+                const indent = isLast ? '       ' : '  │    ';
+                const relPct = fmtScore(r.relevance_score, '—');
+                text += branch + (r.title || r.url) + '  [صلة: ' + relPct + ']\n';
+                text += indent + (r.url || '—') + '\n';
             });
         });
-        text += '\n\n';
+        text += '\n';
     } else {
-        text += '  لا توجد مصادر مصنفة متوفرة حالياً.\n\n\n';
+        text += '  لا توجد مصادر مصنفة.\n\n';
     }
 
-    // ═══════════════════════════════════════════════════════════════════════════
-    //   SECTION 8: FULL SOURCES LIST
-    // ═══════════════════════════════════════════════════════════════════════════
-    text += sectionHeader('[قسم ٨]  قائمة المراجع الكاملة بالتفصيل');
+    // ══ SECTION 8: SOURCES COUNT ONLY ════════════════════════════════════════
+    text += sec('٨', 'المراجع والمصادر');
+    text += '  إجمالي المصادر المتتبعة : ' + results.length + ' مصدر\n';
+    text += '  المصادر الفريدة         : ' + uniqueRes + ' مصدر\n';
+    text += '  للاطلاع على قائمة المصادر الكاملة، استخدم خيار تصدير JSON.\n';
+    // Top 5 sources only
     if (results.length > 0) {
-
-        results.forEach((r, i) => {
-            const relPct  = fmtScore(r.relevance_score, '—');
-            const aiSum   = r.ai_summary || r.summary || '';
-            const snippet = r.snippet || '';
-
-            text += `┌${rep('─', W - 2)}┐\n`;
-            text += row(`[${i + 1}] ${r.title || r.url}`);
-            text += `├${rep('─', W - 2)}┤\n`;
-            text += row(`الرابط        : ${r.url}`);
-            text += row(`المصدر        : ${r.source || '—'}   |   درجة الصلة: ${relPct}`);
-            if (r.date || r.published_date) {
-                text += row(`تاريخ النشر   : ${r.date || r.published_date}`);
-            }
-            if (aiSum && aiSum.trim().length > 10) {
-                text += `├${rep('─', W - 2)}┤\n`;
-                text += row('الملخص الذكي:');
-                text += wrapText(aiSum.trim().replace(/\n/g, ' '), '  ');
-            } else if (snippet && snippet.trim().length > 10) {
-                text += `├${rep('─', W - 2)}┤\n`;
-                text += row('المقتطف:');
-                text += wrapText(snippet.trim().replace(/\n/g, ' '), '  ');
-            }
-            text += `└${rep('─', W - 2)}┘\n\n`;
+        text += '\n  أبرز المصادر (أعلى 5 بالصلة):\n';
+        const top5 = [...results].sort((a,b) => (b.relevance_score||0)-(a.relevance_score||0)).slice(0,5);
+        top5.forEach((r, i) => {
+            const relPct = fmtScore(r.relevance_score, '—');
+            const domain = (r.url || '').replace(/https?:\/\//, '').split('/')[0];
+            text += '  [' + (i + 1) + '] ' + (r.title || domain || '—').slice(0, 60) + '\n';
+            text += '       ' + (domain || '—') + '  |  صلة: ' + relPct + '\n';
         });
-    } else {
-        text += '  لا توجد مصادر مرجعية متوفرة حالياً.\n\n\n';
     }
 
-    // ═══════════════════════════════════════════════════════════════════════════
-    //   SECTION 9: LIVE SEARCH PATH LOG
-    // ═══════════════════════════════════════════════════════════════════════════
-    text += sectionHeader('[قسم ٩]  سجل مسار عملية البحث الحي');
+    // ══ SECTION 9: LIVE SEARCH LOG ════════════════════════════════════════════
+    text += sec('٩', 'سجل مسار البحث الحي');
     if (searchPath.length > 0) {
         searchPath.forEach((step, i) => {
-            const msg  = typeof step === 'string' ? step : (step.message || step.msg || JSON.stringify(step));
+            const msg  = typeof step === 'string' ? step
+                : (step.message || step.msg || JSON.stringify(step));
             const time = typeof step === 'object' ? (step.time || step.timestamp || '') : '';
-            text += `  [${padL(String(i + 1), 3)}] ${time ? '[' + time + ']  ' : ''}${msg}\n`;
+            text += '  [' + String(i + 1).padStart(3) + '] '
+                + (time ? '[' + time + ']  ' : '') + msg + '\n';
         });
     } else {
-        text += '  لا توجد سجلات متوفرة لمسار البحث الحي لهذا الاستعلام.\n';
+        text += '  لا توجد سجلات متوفرة.\n';
     }
-    text += '\n\n';
-
-    // ═══════════════════════════════════════════════════════════════════════════
-    //   SECTION 10: ARCHITECTURAL KNOWLEDGE TOPOLOGY & RELATIONS
-    // ═══════════════════════════════════════════════════════════════════════════
-    text += sectionHeader('[قسم ١٠] خريطة الترابط المعرفي والطوبولوجيا الهيكلية (Knowledge Topology)');
-    
-    // 10.1 Dynamic Relational Topology Blueprint (Vertical Framed Layout)
-    text += '\n  أولاً: مخطط خريطة العلاقات المعرفية والربط الهيكلي (Cognitive Adjacency Tree):\n';
-    text += '  ' + rep('─', W - 4) + '\n\n';
-    
-    // Root Node Box
-    const rootTitle = `الجذر الرئيسي: "${queryStr}"`;
-    text += `  ┌${rep('─', W - 6)}┐\n`;
-    text += `  │ ${padR(rootTitle, W - 8)} │\n`;
-    text += `  └${rep('─', W - 6)}┘\n`;
-    text += '         │\n';
-    
-    // Sentiment Node Box
-    if (sentiment.overall) {
-        const sentTitle = `المشـاعر الـعامـة: ${sentiment.overall} | موضوعية: ${sentiment.objectivity ? (sentiment.objectivity*100).toFixed(0)+'%' : '—'}`;
-        text += '         ▼\n';
-        text += `  ┌${rep('─', W - 6)}┐\n`;
-        text += `  │ ${padR(sentTitle, W - 8)} │\n`;
-        text += `  └${rep('─', W - 6)}┘\n`;
-        text += '         │\n';
-    }
-    
-    // Iterate over categories
-    const catKeys = Object.keys(categories).filter(c => categories[c]?.length > 0);
-    catKeys.forEach((cat, catIdx) => {
-        text += '         ▼\n';
-        
-        // Outer category box width: W - 2 (e.g. 88)
-        const outerWidth = W - 2;
-        const innerWidth = outerWidth - 4; // 84
-        
-        // Category Header
-        text += `┌${rep('─', outerWidth - 2)}┐\n`;
-        text += `│ ${padR(`الفئة المعرفية: ${cat.toUpperCase()}`, innerWidth)} │\n`;
-        text += `├${rep('─', outerWidth - 2)}┤\n`;
-        
-        const catSrcs = categories[cat].slice(0, 3); // top 3 sources
-        catSrcs.forEach((r, rIdx) => {
-            const isLastSrc = rIdx === catSrcs.length - 1;
-            
-            // Source Title & relevance
-            const rTitle = r.title || r.url || 'مصدر مرجعي';
-            const score = fmtScore(r.relevance_score, '—');
-            const srcHeader = `العنوان: ${rTitle.slice(0, 42)} (${score})`;
-            
-            // Draw source box top
-            text += `│  [مصدر] ──> ┌${rep('─', 63)}┐  │\n`;
-            text += `│             │ ${padR(srcHeader, 61)} │  │\n`;
-            text += `│             ├${rep('─', 63)}┤  │\n`;
-            
-            // Find keyword/entity matches in this source content
-            const matches = [];
-            const rContent = ((r.content || '') + (r.snippet || '') + (r.title || '')).toLowerCase();
-            
-            // Keywords matches
-            keywords.slice(0, 5).forEach(kw => {
-                const word = typeof kw === 'object' ? kw.word : String(kw);
-                if (rContent.includes(word.toLowerCase())) {
-                    matches.push({ type: 'دلالة', val: word });
-                }
-            });
-            
-            // Entities matches
-            const personsList = (entities.persons || []).slice(0, 3);
-            const orgsList = (entities.organizations || []).slice(0, 3);
-            personsList.concat(orgsList).forEach(ent => {
-                if (rContent.includes(ent.toLowerCase().slice(0, 10))) {
-                    matches.push({ type: 'كيان', val: ent });
-                }
-            });
-            
-            // Draw matched child nodes inside source box
-            const displayMatches = matches.slice(0, 3); // show up to 3 connections
-            if (displayMatches.length > 0) {
-                displayMatches.forEach((m, mIdx) => {
-                    const isLastMatch = mIdx === displayMatches.length - 1;
-                    const matchBranch = isLastMatch ? '└─ ' : '├─ ';
-                    const matchText = `${matchBranch}[${m.type}]: ${m.val.slice(0, 38)}`;
-                    text += `│             │ ${padR(matchText, 61)} │  │\n`;
-                });
-            } else {
-                text += `│             │ ${padR('لا توجد تقاطعات دلالية مباشرة', 61)} │  │\n`;
-            }
-            
-            // Draw source box bottom
-            text += `│             └${rep('─', 63)}┘  │\n`;
-            
-            if (!isLastSrc) {
-                text += `│                                                                                    │\n`;
-            }
-        });
-        
-        text += `└${rep('─', outerWidth - 2)}┘\n`;
-        
-        if (catIdx < catKeys.length - 1) {
-            text += '         │\n';
-        }
-    });
-    text += '\n\n';
-
-    // 10.2 Cognitive Nodes Register
-    text += '  ثانياً: سجل العقد المعرفية في الشبكة (Cognitive Nodes Register):\n';
-    text += '  ' + rep('─', W - 4) + '\n';
-    let nodeIndex = 1;
-    text += `  [العقدة #${padL(String(nodeIndex++), 2)}] [نوع: استعلام جذر]  "${queryStr}"\n`;
-    if (sentiment.overall) {
-        text += `  [العقدة #${padL(String(nodeIndex++), 2)}] [نوع: نبرة مشاعر ]  "${sentiment.overall}" (موضوعية: ${sentiment.objectivity ? (sentiment.objectivity*100).toFixed(0)+'%' : '—'} | ذاتية: ${sentiment.subjectivity ? (sentiment.subjectivity*100).toFixed(0)+'%' : '—'})\n`;
-    }
-    catKeys.forEach(cat => {
-        text += `  [العقدة #${padL(String(nodeIndex++), 2)}] [نوع: فئة معرفية]  "${cat.toUpperCase()}" (تضم ${categories[cat].length} مصادر)\n`;
-    });
-    results.forEach((r, idx) => {
-        const score = fmtScore(r.relevance_score, '—');
-        const rTitle = r.title || r.url || `مصدر ${idx+1}`;
-        text += `  [العقدة #${padL(String(nodeIndex++), 2)}] [نوع: مصدر مرجعي ]  "${rTitle.slice(0, 50)}" [الصلة: ${score}] (حجم: ${r.content_length || r.metadata?.word_count || 0} ك)\n`;
-    });
-    const topKwsRegister = keywords.slice(0, 15);
-    topKwsRegister.forEach(kw => {
-        const word = typeof kw === 'object' ? kw.word : String(kw);
-        const freq = typeof kw === 'object' ? kw.frequency : 1;
-        text += `  [العقدة #${padL(String(nodeIndex++), 2)}] [نوع: مصطلح دلالي]  "${word}" (تكرار: ${freq} مرات في التحليل)\n`;
-    });
-    
-    // Add Entities to nodes
-    const personsList = (entities.persons || []).slice(0, 5);
-    const orgsList = (entities.organizations || []).slice(0, 5);
-    const locsList = (entities.locations || []).slice(0, 5);
-    
-    personsList.forEach(p => {
-        text += `  [العقدة #${padL(String(nodeIndex++), 2)}] [نوع: كيان (شخص)  ]  "${p}"\n`;
-    });
-    orgsList.forEach(o => {
-        text += `  [العقدة #${padL(String(nodeIndex++), 2)}] [نوع: كيان (منظمة) ]  "${o}"\n`;
-    });
-    locsList.forEach(l => {
-        text += `  [العقدة #${padL(String(nodeIndex++), 2)}] [نوع: كيان (موقع)  ]  "${l}"\n`;
-    });
     text += '\n';
 
-    // 10.3 Directed Edges Registry
-    text += '  ثالثاً: سجل العلاقات والروابط المعرفية (Directed Knowledge Edges):\n';
-    text += '  ' + rep('─', W - 4) + '\n';
-    let edgeIndex = 1;
+    // ══ SECTION 10: AI SEMANTIC ANALYSIS SUMMARY ══════════════════════════════
+    text += sec('١٠', 'ملخص التحليل الدلالي والشبكة المعرفية');
+
+    // Category summary
+    const catKeys = Object.keys(categories).filter(c => categories[c] && categories[c].length > 0);
+    if (catKeys.length > 0) {
+        text += subSec('الفئات المعرفية المكتشفة');
+        catKeys.forEach(cat => {
+            text += '  • ' + cat + '  (' + categories[cat].length + ' مصدر)\n';
+        });
+        text += '\n';
+    }
+
+    // Top keywords
+    if (keywords.length > 0) {
+        text += subSec('أبرز المفاهيم الدلالية');
+        keywords.slice(0, 15).forEach((kw, i) => {
+            const word = typeof kw === 'object' ? kw.word : String(kw);
+            const freq = typeof kw === 'object' ? (kw.frequency || 1) : 1;
+            text += '  ' + String(i + 1).padStart(2) + '. ' + word + '  (' + freq + ' تكرار)\n';
+        });
+        text += '\n';
+    }
+
+    // Sentiment wrap-up
     if (sentiment.overall) {
-        text += `  [${padL(String(edgeIndex++), 2)}] [استعلام جذر] ════(تحليل الانطباع)════> [تحليل مشاعر: ${sentiment.overall}]\n`;
-    }
-    catKeys.forEach(cat => {
-        text += `  [${padL(String(edgeIndex++), 2)}] [استعلام جذر] ════(يُصنف تحت فئة)════> [فئة: ${cat.toUpperCase()}]\n`;
-        categories[cat].forEach(r => {
-            const rTitle = r.title || r.url || 'مصدر';
-            const score = fmtScore(r.relevance_score, '—');
-            text += `  [${padL(String(edgeIndex++), 2)}] [فئة: ${cat.toUpperCase()}] ════(يحتوي على مصدر)════> [مصدر: ${rTitle.slice(0, 30)}] (صلة: ${score})\n`;
-        });
-    });
-    
-    // Map keywords to sources
-    keywords.slice(0, 10).forEach(kw => {
-        const word = typeof kw === 'object' ? kw.word : String(kw);
-        if (typeof kw === 'object' && kw.distribution) {
-            kw.distribution.slice(0, 2).forEach(dist => {
-                const matchSrc = results.find(r => r.url && r.url.includes(dist.site));
-                if (matchSrc) {
-                    text += `  [${padL(String(edgeIndex++), 2)}] [مصدر: ${(matchSrc.title||'').slice(0, 20)}] ════(يحتوي مصطلح)════> [دلالة: ${word}] (كرر: ${dist.count})\n`;
-                }
-            });
+        text += subSec('الانطباع العام للمصادر');
+        text += '  النبرة: ' + sentiment.overall + '\n';
+        if (sentiment.objectivity != null) {
+            text += '  الموضوعية: ' + (sentiment.objectivity * 100).toFixed(0) + '%'
+                + '  |  الذاتية: ' + ((sentiment.subjectivity || 0) * 100).toFixed(0) + '%\n';
         }
-    });
-    text += '\n';
-
-    // 10.4 Semantic Dissemination Matrix Grid (Keywords x Sources)
-    text += '  رابعاً: مصفوفة الانتشار والترابط الدلالي للمصطلحات (Semantic Co-occurrence Matrix):\n';
-    text += '  ' + rep('─', W - 4) + '\n';
-    if (keywords.length > 0 && results.length > 0) {
-        const matrixKws = keywords.slice(0, 12).map(k => typeof k === 'object' ? k.word : String(k));
-        const matrixSrcs = results.slice(0, 5); // Max 5 columns
-        
-        const getDomain = (url) => {
-            try {
-                if (!url) return 'SOURCE';
-                const domainStr = new URL(url).hostname.replace('www.', '');
-                return domainStr.length > 10 ? domainStr.slice(0, 9) + '…' : domainStr;
-            } catch (_) {
-                return url ? (url.length > 10 ? url.slice(0, 9) + '…' : url) : 'SOURCE';
-            }
-        };
-
-        // Print header row with actual domains
-        let headerRow = '  ' + padR('المصطلحات الدلالية', 18) + '│';
-        matrixSrcs.forEach((srcObj) => {
-            const dom = getDomain(srcObj.url);
-            headerRow += padC(dom, 12) + '│';
-        });
-        text += headerRow + '\n';
-        text += '  ' + rep('─', 18) + '┼' + rep(rep('─', 12) + '┼', matrixSrcs.length) + '\n';
-        
-        // Pre-compute and cache lowercase contents
-        const cachedContents = matrixSrcs.map((srcObj) => {
-            return ((srcObj.content || '') + (srcObj.snippet || '')).toLowerCase();
-        });
-
-        // Print matrix content
-        matrixKws.forEach(kw => {
-            let rowText = '  ' + padR(kw, 18) + '│';
-            const kwLower = kw.toLowerCase();
-            matrixSrcs.forEach((_, sIdx) => {
-                const contentText = cachedContents[sIdx];
-                const count = contentText.split(kwLower).length - 1;
-                if (count > 0) {
-                    rowText += padC(`✓ (${count})`, 12) + '│';
-                } else {
-                    rowText += padC('—', 12) + '│';
-                }
-            });
-            text += rowText + '\n';
-        });
-        
-        text += '  ' + rep('─', 18) + '┴' + rep(rep('─', 12) + '┴', matrixSrcs.length) + '\n';
-        
-        // Print reference list of source index mapping
-        text += '\n  * دليل المصادر والمراجع في المصفوفة (Source Catalog Legend):\n';
-        matrixSrcs.forEach((srcObj) => {
-            const dom = getDomain(srcObj.url);
-            const title = srcObj.title || srcObj.url || 'مصدر مرجعي';
-            text += `    [${padR(dom, 10)}] ──> "${title}" (${srcObj.url})\n`;
-        });
-    } else {
-        text += '  لا توجد بيانات كافية لبناء مصفوفة الانتشار الدلالي.\n';
+        text += '\n';
     }
-    text += '\n\n';
 
-
-    // ═══════════════════════════════════════════════════════════════════════════
-    //   FOOTER
-    // ═══════════════════════════════════════════════════════════════════════════
-    text += bold();
-    text += padC('تم إصدار هذا التقرير بواسطة محرك ROOTSEARCH', W) + '\n';
-    text += padC('Deep Cognitive Search & Analysis System — Demo 1 T', W) + '\n';
-    text += padC(`الاستعلام: "${queryStr}"  |  ${timestamp}`, W) + '\n';
-    text += bold();
+    // ══ FOOTER ════════════════════════════════════════════════════════════════
+    text += '\n' + SEP + '\n';
+    text += '  تم إصدار هذا التقرير بواسطة محرك ROOTSEARCH\n';
+    text += '  الاستعلام: "' + queryStr + '"\n';
+    text += '  ' + timestamp + '\n';
+    text += SEP + '\n';
 
     const blob = new Blob(['\uFEFF' + text], { type: 'text/plain;charset=utf-8' });
-    downloadBlob(blob, `rootsearch_report_${queryStr.replace(/\s+/g, '_').slice(0, 40)}_${Date.now()}.txt`);
-    showToast('تم تصدير التقرير الشامل فائق الجودة بنجاح', 'success');
+    downloadBlob(blob, 'rootsearch_report_' + queryStr.replace(/\s+/g, '_').slice(0, 40) + '_' + Date.now() + '.txt');
+    showToast('تم تصدير التقرير بنجاح', 'success');
 }
+
 // ═══════════════════════════════════════════════════════════════════════════
 //   ARCHITECTURAL TOPOLOGY EXPORT SYSTEM
 //   Generates: interactive HTML (vis-network), GraphML, DOT/Graphviz
@@ -4130,4 +4280,50 @@ function toggleReportThinking() {
         box.classList.add('is-expanded');
         content.style.display = 'block';
     }
+}
+
+// ─── FATHOM LANDING PAGE HELPERS ───────────────────────────────────
+
+function initCountUpCounters() {
+    const counters = document.querySelectorAll('.stat-num');
+    counters.forEach(counter => {
+        const target = parseInt(counter.getAttribute('data-target'), 10);
+        if (isNaN(target)) return;
+        
+        let start = 0;
+        const duration = 1200; // Animation duration in ms
+        const increment = target / (duration / 16); // ~60fps
+        
+        const updateCount = () => {
+            start += increment;
+            if (start < target) {
+                counter.textContent = Math.floor(start);
+                requestAnimationFrame(updateCount);
+            } else {
+                counter.textContent = target + (target === 600 || target === 1000 ? '+' : '');
+            }
+        };
+        
+        // Start animation
+        updateCount();
+    });
+}
+
+function runQuickQuery(queryText, modelName) {
+    const input = document.getElementById('searchInput');
+    if (!input) return;
+    input.value = queryText;
+    
+    // Select the model
+    selectDropdownModel(modelName);
+    
+    // Trigger input event to update submit state (like enabling the clear button)
+    const inputEvent = new Event('input', { bubbles: true });
+    input.dispatchEvent(inputEvent);
+    
+    // Call handleSearch with a mock event
+    const mockEvent = {
+        preventDefault: () => {}
+    };
+    handleSearch(mockEvent);
 }

@@ -1,5 +1,5 @@
 """
-FuckenSearch — HuggingFace Space Entry Point (Gradio)
+RootSearch — HuggingFace Space Entry Point (Gradio)
 واجهة بحث احترافية تعمل على HuggingFace Spaces مجاناً
 """
 
@@ -58,6 +58,7 @@ SOURCE_EMOJIS = {
     "mojeek": "🌍",
     "qwant": "🇫🇷",
     "ecosia": "🌳",
+    "plos": "🧬",
     "searx": "⚙️",
     "wikidata": "🗂️",
     "openlibrary": "📕",
@@ -288,12 +289,12 @@ body, .gradio-container {
 """
 
 with gr.Blocks(
-    title="🔍 FuckenSearch — Deep Search Engine",
+    title="🔍 RootSearch — Deep Search Engine",
 ) as demo:
 
     gr.HTML("""
     <div class="search-header">
-        <h1>🔍 FuckenSearch</h1>
+        <h1>🔍 RootSearch</h1>
         <p>محرك بحث عميق يجمع من <strong>22+ مصدر مجاني</strong> — ويكيبيديا، أبحاث علمية، مجتمعات تقنية، كتب وأرشيف</p>
     </div>
     """)
@@ -374,8 +375,8 @@ with gr.Blocks(
     gr.HTML("""
     <div style='text-align:center;margin-top:24px;padding:16px;
                 border-top:1px solid #e2e8f0;color:#94a3b8;font-size:12px;'>
-        FuckenSearch v2.0 — Open Source Deep Search Engine |
-        <a href='https://github.com/fuckensearch' style='color:#7c3aed;'>GitHub</a>
+        RootSearch v2.0 — Open Source Deep Search Engine |
+        <a href='https://github.com/rootsearch' style='color:#7c3aed;'>GitHub</a>
     </div>
     """)
 

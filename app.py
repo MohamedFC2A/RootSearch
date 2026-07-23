@@ -1,5 +1,5 @@
 """
-FuckenSearch — Main Entry Point
+RootSearch — Main Entry Point
 يحدد نوع التشغيل: HuggingFace Space (Gradio) أو FastAPI server
 """
 
