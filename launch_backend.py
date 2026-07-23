@@ -24,7 +24,7 @@ def update_key_value(url: str):
         req = urllib.request.Request(api_url, method="POST")
         with urllib.request.urlopen(req, timeout=10) as response:
             result = response.read().decode("utf-8").strip()
-            if result == "True":
+            if result.lower() == "true":
                 print(f"[KV STORE] Successfully updated database with URL: {url}")
             else:
                 print(f"[KV STORE] Warning: Server returned '{result}' when saving URL.")
@@ -89,6 +89,7 @@ def main():
         
     tunnel_cmd = [
         CLOUDFLARED_PATH, "tunnel",
+        "--protocol", "http2",
         "--url", f"http://127.0.0.1:{PORT}"
     ]
     print(f"[LAUNCHER] Starting Cloudflare Quick Tunnel...")

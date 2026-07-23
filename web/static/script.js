@@ -50,7 +50,7 @@ function abortActiveStream() {
 }
 
 window.addEventListener('beforeunload', () => abortActiveStream());
-window.addEventListener('unload', () => abortActiveStream());
+window.addEventListener('pagehide', () => abortActiveStream());
 document.addEventListener('visibilitychange', () => {
     if (document.hidden && window.RootSearchState.isSearching) {
         console.log("[RootSearch] Tab hidden during stream processing.");

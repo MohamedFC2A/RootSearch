@@ -2,15 +2,10 @@
    RootSearch — إعدادات عنوان الباك-اند (Frontend Runtime Config)
    ───────────────────────────────────────────────────────────────
    • عند التشغيل محليًا (localhost) → تستخدم الواجهة نفس الأصل مباشرةً.
-   • عند النشر على Vercel → تستخدم رابط النفق العام للباك-اند المحلي.
-
-   👇 غيّر السطر التالي فقط بعد تشغيل النفق (Cloudflare Tunnel أو ngrok)
-      وضع فيه الرابط الذي يظهر لك (لا تضع "/" في النهاية):
+   • عند النشر على Vercel → تجلب رابط النفق المباشر من مخزن المفاتيح السحابي.
    ═══════════════════════════════════════════════════════════════ */
 
 (function () {
-  // ⚠️ القيمة الافتراضية الاحتياطية
-  var FALLBACK_REMOTE_BACKEND_URL = "https://slide-mambo-became-dictionaries.trycloudflare.com";
   var APP_KEY = "bjalhi4q";
   var KEY = "backend_url";
 
@@ -21,13 +16,12 @@
     host === "0.0.0.0" ||
     host === "";
 
-  // محليًا: نفس الأصل (فارغ) — على Vercel: رابط النفق
+  // محليًا: نفس الأصل (فارغ) — على Vercel: رابط النفق المباشر
   if (isLocal) {
     window.API_BASE = "";
     window.API_BASE_PROMISE = Promise.resolve("");
   } else {
-    // على Vercel: جلب الرابط الديناميكي من مخزن المفاتيح السحابي
-    window.API_BASE = FALLBACK_REMOTE_BACKEND_URL; // قيمة احتياطية فورية
+    window.API_BASE = "";
     window.API_BASE_PROMISE = (async function () {
       try {
         const response = await fetch("https://keyvalue.immanuel.co/api/KeyVal/GetValue/" + APP_KEY + "/" + KEY + "?t=" + Date.now(), { cache: "no-store" });
@@ -42,9 +36,9 @@
           }
         }
       } catch (err) {
-        console.error("[RootSearch] Failed to fetch dynamic backend URL, using fallback:", err);
+        console.error("[RootSearch] Failed to fetch dynamic backend URL:", err);
       }
-      return window.API_BASE;
+      return window.API_BASE || "";
     })();
   }
 
