@@ -1592,30 +1592,53 @@ function renderSemanticVisualPanel(report) {
 
 // ─── MODEL SELECTOR DROPDOWN ──────────────────────────────────
 function initModelSelector() {
-    const trigger = document.getElementById('modelDropdownTrigger');
-    if (!trigger) return;
-    trigger.addEventListener('click', e => {
-        e.stopPropagation();
-        toggleModelDropdown();
-    });
-    document.addEventListener('click', () => {
-        const menu = document.getElementById('modelDropdownMenu');
-        if (menu) menu.classList.remove('open');
+    const wrap = document.querySelector('.model-dropdown-wrap');
+    
+    // Restore saved model preference from localStorage
+    const savedModel = localStorage.getItem('selectedSearchModel') || 'fathom_s1';
+    selectDropdownModel(savedModel);
+
+    document.addEventListener('click', e => {
+        if (wrap && !wrap.contains(e.target)) {
+            closeModelDropdown();
+        }
     });
 }
 
-function toggleModelDropdown() {
+function toggleModelDropdown(e) {
+    if (e && e.stopPropagation) e.stopPropagation();
+    const wrap = document.querySelector('.model-dropdown-wrap');
     const menu = document.getElementById('modelDropdownMenu');
-    if (menu) menu.classList.toggle('open');
+    const isCurrentlyOpen = wrap ? wrap.classList.contains('open') : false;
+    
+    if (wrap) wrap.classList.toggle('open', !isCurrentlyOpen);
+    if (menu) menu.classList.toggle('open', !isCurrentlyOpen);
+
+    const trigger = document.getElementById('modelDropdownTrigger');
+    if (trigger) trigger.setAttribute('aria-expanded', !isCurrentlyOpen ? 'true' : 'false');
 }
 
 function selectDropdownModel(modelValue) {
     const input = document.getElementById('searchModelInput');
     const triggerLabel = document.querySelector('.dropdown-label-active');
+    const triggerIcon = document.querySelector('.dropdown-icon-active');
+    const wrap = document.querySelector('.model-dropdown-wrap');
     const items = document.querySelectorAll('.model-dropdown-item');
 
     if (input) input.value = modelValue;
     if (triggerLabel) triggerLabel.textContent = modelValue === 'fathom_s1' ? 'S1' : 'MAX';
+
+    if (triggerIcon) {
+        if (modelValue === 'fathom_max') {
+            triggerIcon.className = 'fas fa-spider dropdown-icon-active';
+        } else {
+            triggerIcon.className = 'fas fa-bolt dropdown-icon-active';
+        }
+    }
+
+    if (wrap) {
+        wrap.classList.toggle('fathom-max-selected', modelValue === 'fathom_max');
+    }
 
     items.forEach(item => {
         const isMatch = item.getAttribute('data-value') === modelValue;
@@ -1630,8 +1653,12 @@ function selectDropdownModel(modelValue) {
 }
 
 function closeModelDropdown() {
+    const wrap = document.querySelector('.model-dropdown-wrap');
     const menu = document.getElementById('modelDropdownMenu');
+    const trigger = document.getElementById('modelDropdownTrigger');
+    if (wrap) wrap.classList.remove('open');
     if (menu) menu.classList.remove('open');
+    if (trigger) trigger.setAttribute('aria-expanded', 'false');
 }
 
 // ─── HELPER UTILS ─────────────────────────────────────────────
