@@ -10,7 +10,7 @@
 
 (function () {
   // ⚠️ القيمة الافتراضية الاحتياطية
-  var FALLBACK_REMOTE_BACKEND_URL = "https://ste-calculation-reward-ebony.trycloudflare.com";
+  var FALLBACK_REMOTE_BACKEND_URL = "https://slide-mambo-became-dictionaries.trycloudflare.com";
   var APP_KEY = "bjalhi4q";
   var KEY = "backend_url";
 
