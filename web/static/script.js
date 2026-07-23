@@ -21,8 +21,100 @@ window.RootSearchState = {
         firstTokenTime: 0
     },
     theme: localStorage.getItem('rootsearch_theme') || (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'),
-    streamStatus: 'idle' // 'idle' | 'connecting' | 'streaming' | 'reconnecting' | 'complete' | 'error'
+    streamStatus: 'idle', // 'idle' | 'connecting' | 'streaming' | 'reconnecting' | 'complete' | 'error'
+    activeAbortController: null,
+    tokenQueue: [],
+    isUserScrollingUp: false,
+    sessionId: null
 };
+
+// ─── DISCONNECT & ABORT HANDLER ─────────────────────────────
+function abortActiveStream() {
+    if (window.RootSearchState.activeAbortController) {
+        console.log("[RootSearch] Aborting active network stream via AbortController.");
+        try {
+            window.RootSearchState.activeAbortController.abort();
+        } catch (e) {
+            console.warn("Error aborting controller:", e);
+        }
+        window.RootSearchState.activeAbortController = null;
+    }
+    if (window._sseReconnectTimer) {
+        clearTimeout(window._sseReconnectTimer);
+        window._sseReconnectTimer = null;
+    }
+    if (activeSSE) {
+        try { activeSSE.close(); } catch (_) {}
+        activeSSE = null;
+    }
+}
+
+window.addEventListener('beforeunload', () => abortActiveStream());
+window.addEventListener('unload', () => abortActiveStream());
+document.addEventListener('visibilitychange', () => {
+    if (document.hidden && window.RootSearchState.isSearching) {
+        console.log("[RootSearch] Tab hidden during stream processing.");
+    }
+});
+
+// ─── SCROLL GUARD & SESSION RESTORATION ─────────────────────
+function initScrollGuard() {
+    const checkScroll = () => {
+        const scrollTop = window.scrollY || document.documentElement.scrollTop;
+        const scrollHeight = document.documentElement.scrollHeight;
+        const clientHeight = window.innerHeight;
+        const isAtBottom = (scrollHeight - (scrollTop + clientHeight)) < 80;
+        window.RootSearchState.isUserScrollingUp = !isAtBottom;
+    };
+    window.addEventListener('scroll', checkScroll, { passive: true });
+}
+
+function restoreSessionState() {
+    try {
+        const saved = sessionStorage.getItem('rootsearch_active_session');
+        if (saved) {
+            const data = JSON.parse(saved);
+            if (data && data.query && (Date.now() - (data.timestamp || 0) < 1800000)) {
+                const input = document.getElementById('searchInput');
+                if (input && !input.value) {
+                    input.value = data.query;
+                    if (data.model) selectDropdownModel(data.model);
+                }
+            }
+        }
+    } catch (_) {}
+}
+
+let rafTokenId = null;
+function startTokenQueueLoop() {
+    if (rafTokenId) return;
+    function processQueue() {
+        if (window.RootSearchState.tokenQueue.length > 0) {
+            const batch = window.RootSearchState.tokenQueue.splice(0, 4).join('');
+            if (batch) {
+                const { cleanText } = extractAndStripMetadata(batch);
+                if (cleanText) {
+                    const aiOverview = document.getElementById('aiOverviewCapsule');
+                    const aiOverviewBody = document.getElementById('aiOverviewBody');
+                    if (aiOverview && aiOverviewBody) {
+                        aiOverview.style.display = 'block';
+                        aiOverviewBody.innerHTML += renderInteractiveMarkdown(cleanText);
+                        if (!window.RootSearchState.isUserScrollingUp) {
+                            const capsule = document.getElementById('aiOverviewCapsule');
+                            if (capsule) capsule.scrollIntoView({ behavior: 'smooth', block: 'end' });
+                        }
+                    }
+                }
+            }
+        }
+        if (window.RootSearchState.isSearching || window.RootSearchState.tokenQueue.length > 0) {
+            rafTokenId = requestAnimationFrame(processQueue);
+        } else {
+            rafTokenId = null;
+        }
+    }
+    rafTokenId = requestAnimationFrame(processQueue);
+}
 
 // ─── API BASE ────────────────────────────────────────────────
 let API_BASE = (window.API_BASE || '').replace(/\/+$/, '');
@@ -68,6 +160,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     loadSystemStatus();
     initModelSelector();
     restoreUrlParams();
+    initScrollGuard();
+    restoreSessionState();
 
     // Keyboard shortcut Ctrl+K / Cmd+K for K-Trust toggle
     document.addEventListener('keydown', e => {
@@ -401,7 +495,13 @@ function showToast(message, type = 'info', duration = 4500) {
 // ─── SYSTEM DIAGNOSTICS & RETRY ───────────────────────────────
 async function loadSystemStatus() {
     try {
-        const res = await fetch(`${API_BASE}/api/status`);
+        const res = await fetch(`${API_BASE}/api/status`, {
+            headers: {
+                'ngrok-skip-browser-warning': '1',
+                'bypass-tunnel-reminder': '1',
+                'X-Requested-With': 'XMLHttpRequest'
+            }
+        });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
         if (data.fathom_s1_max_sources) systemLimits.fathom_s1_max_sources = data.fathom_s1_max_sources;
@@ -418,7 +518,12 @@ async function loadSystemStatus() {
 
 function runSystemDiagnostics(error) {
     const banner = document.getElementById('diagnosticBanner');
+    const bypassBtn = document.getElementById('diagnosticBypassBtn');
     if (banner) banner.style.display = 'block';
+    if (bypassBtn) {
+        const backendTarget = API_BASE ? `${API_BASE}/api/status` : '/api/status';
+        bypassBtn.href = backendTarget;
+    }
     setStatusDot('error', 'offline');
 }
 
@@ -974,10 +1079,29 @@ function selectInspectorNode(nodeId, stage, status, label, metadata, isAuto = fa
 // ─── SSE STREAM CONSUMER & EXPONENTIAL BACKOFF ────────────────
 function startSSEStream(query, model, attempt = 0) {
     let streamDone = false;
-    const MAX_RECONNECTS = 3;
+    const cfg = window.STREAM_CONFIG || { MAX_RECONNECT_ATTEMPTS: 3, RECONNECT_DELAYS_MS: [1000, 3000, 7000] };
+    const MAX_RECONNECTS = cfg.MAX_RECONNECT_ATTEMPTS || 3;
+    const delays = cfg.RECONNECT_DELAYS_MS || [1000, 3000, 7000];
 
-    if (window._sseReconnectTimer) { clearTimeout(window._sseReconnectTimer); window._sseReconnectTimer = null; }
+    // Abort prior stream controller on new search trigger
+    if (attempt === 0) {
+        abortActiveStream();
+        window.RootSearchState.activeAbortController = new AbortController();
+        window.RootSearchState.tokenQueue = [];
+    }
+
+    const requestId = (window.crypto && window.crypto.randomUUID) ? window.crypto.randomUUID() : 'req-' + Date.now() + '-' + Math.random().toString(36).substring(2, 9);
     
+    // Save to sessionStorage for refresh survival
+    try {
+        sessionStorage.setItem('rootsearch_active_session', JSON.stringify({
+            query: query,
+            model: model,
+            isKTrusted: isKTrustedActive,
+            timestamp: Date.now()
+        }));
+    } catch (_) {}
+
     // Throttle rendering updates to preserve 60fps UI
     let renderPending = false;
     function scheduleRender(report) {
@@ -994,12 +1118,24 @@ function startSSEStream(query, model, attempt = 0) {
         });
     }
 
-    const url = `${API_BASE}/api/search/stream?q=${encodeURIComponent(query)}&model=${model}&nocache=true` + (isKTrustedActive ? '&k_trusted=true' : '');
+    const url = `${API_BASE}/api/search/stream?q=${encodeURIComponent(query)}&model=${model}&nocache=true` + (isKTrustedActive ? '&k_trusted=true' : '') + `&req_id=${encodeURIComponent(requestId)}`;
+    
     const sse = new EventSource(url);
     activeSSE = sse;
 
     window.RootSearchState.streamStatus = attempt > 0 ? 'reconnecting' : 'streaming';
     setStatusDot('live', attempt > 0 ? `Reconnecting (${attempt}/${MAX_RECONNECTS})...` : 'Searching...');
+
+    startTokenQueueLoop();
+
+    // 0. Handshake Init Event
+    sse.addEventListener('init', e => {
+        try {
+            const data = JSON.parse(e.data);
+            if (data.session_id) window.RootSearchState.sessionId = data.session_id;
+            window.RootSearchState.metrics.startTime = performance.now();
+        } catch (_) {}
+    });
 
     // 1. Stage 0: Start Event
     sse.addEventListener('start', e => {
@@ -1009,7 +1145,67 @@ function startSSEStream(query, model, attempt = 0) {
         } catch (_) {}
     });
 
-    // 2. Stage 1: Search Progress
+    // 2. Metadata Event (Typed Citations)
+    sse.addEventListener('metadata', e => {
+        try {
+            const data = JSON.parse(e.data);
+            if (data.citations) {
+                window.RootSearchState.citations = {
+                    ...window.RootSearchState.citations,
+                    ...data.citations
+                };
+            }
+        } catch (_) {}
+    });
+
+    // 3. Token Event (60fps rAF Token Queue)
+    sse.addEventListener('token', e => {
+        try {
+            const data = JSON.parse(e.data);
+            const delta = data.delta || '';
+            if (delta) {
+                if (!window.RootSearchState.metrics.firstTokenTime) {
+                    window.RootSearchState.metrics.firstTokenTime = performance.now();
+                    window.RootSearchState.metrics.ttftMs = window.RootSearchState.metrics.firstTokenTime - window.RootSearchState.metrics.startTime;
+                }
+                window.RootSearchState.metrics.totalTokens += delta.length / 4;
+                window.RootSearchState.tokenQueue.push(delta);
+            }
+        } catch (_) {}
+    });
+
+    // 4. Synthesis Chunk (Backward Compatibility)
+    sse.addEventListener('synthesis_chunk', e => {
+        try {
+            const data = JSON.parse(e.data);
+            const chunk = data.chunk || '';
+            if (chunk) {
+                if (!window.RootSearchState.metrics.firstTokenTime) {
+                    window.RootSearchState.metrics.firstTokenTime = performance.now();
+                    window.RootSearchState.metrics.ttftMs = window.RootSearchState.metrics.firstTokenTime - window.RootSearchState.metrics.startTime;
+                }
+                window.RootSearchState.metrics.totalTokens += chunk.length / 4;
+                window.RootSearchState.tokenQueue.push(chunk);
+            }
+        } catch (_) {}
+    });
+
+    // 5. Metrics Event
+    sse.addEventListener('metrics', e => {
+        try {
+            const data = JSON.parse(e.data);
+            if (data.ttft_ms) window.RootSearchState.metrics.ttftMs = data.ttft_ms;
+            if (data.tps) window.RootSearchState.metrics.tps = data.tps;
+            if (data.grounding_score) window.RootSearchState.metrics.groundingScore = data.grounding_score;
+        } catch (_) {}
+    });
+
+    // 6. Ping Event (Keep-alive)
+    sse.addEventListener('ping', e => {
+        // Keep-alive heartbeat frame received
+    });
+
+    // Search & Scrape progress events
     sse.addEventListener('search_progress', e => {
         try {
             const d = JSON.parse(e.data);
@@ -1019,7 +1215,6 @@ function startSSEStream(query, model, attempt = 0) {
         } catch (_) {}
     });
 
-    // 3. Stage 2: Scrape Progress
     sse.addEventListener('scrape_progress', e => {
         try {
             const d = JSON.parse(e.data);
@@ -1027,32 +1222,6 @@ function startSSEStream(query, model, attempt = 0) {
         } catch (_) {}
     });
 
-    // 4. Stage 3: Synthesis Chunk (Tokens)
-    sse.addEventListener('synthesis_chunk', e => {
-        try {
-            const data = JSON.parse(e.data);
-            const chunk = data.chunk || '';
-            
-            if (!window.RootSearchState.metrics.firstTokenTime) {
-                window.RootSearchState.metrics.firstTokenTime = performance.now();
-                window.RootSearchState.metrics.ttftMs = window.RootSearchState.metrics.firstTokenTime - window.RootSearchState.metrics.startTime;
-            }
-
-            window.RootSearchState.metrics.totalTokens += chunk.length / 4; // Approx token ratio
-
-            const { cleanText } = extractAndStripMetadata(chunk);
-            if (cleanText) {
-                const aiOverview = document.getElementById('aiOverviewCapsule');
-                const aiOverviewBody = document.getElementById('aiOverviewBody');
-                if (aiOverview && aiOverviewBody) {
-                    aiOverview.style.display = 'block';
-                    aiOverviewBody.innerHTML += renderInteractiveMarkdown(cleanText);
-                }
-            }
-        } catch (_) {}
-    });
-
-    // tree_node & node_status_update
     sse.addEventListener('tree_node', e => {
         try {
             const d = JSON.parse(e.data);
@@ -1076,45 +1245,47 @@ function startSSEStream(query, model, attempt = 0) {
         } catch (_) {}
     });
 
-    // 5. Stage 4 & Complete
+    // 7. Complete & Done Events
+    const handleStreamComplete = (report) => {
+        if (window.searchTimerInterval) {
+            clearInterval(window.searchTimerInterval);
+            window.searchTimerInterval = null;
+        }
+
+        currentSearchData = report;
+        scheduleRender(report);
+
+        const activeStatus = document.getElementById('searchActiveStatus');
+        const resultsContainer = document.getElementById('searchResultsCountContainer');
+        if (activeStatus) activeStatus.style.display = 'none';
+        if (resultsContainer) resultsContainer.style.display = 'inline-block';
+
+        const elapsedVal = (Date.now() - searchStartTime) / 1000;
+        const elapsed = Math.max(0.1, elapsedVal).toFixed(1);
+        document.getElementById('searchTime').textContent = elapsed;
+        document.getElementById('resultsCount').textContent = formatScaryCount(report.total_results || 0);
+
+        updateTreeNode('verification', 'success', 'التقرير جاهز', null);
+        setStatusDot('idle', 'Done');
+        window.RootSearchState.streamStatus = 'complete';
+
+        showToast(`تم العثور على ${formatScaryCount(report.total_results || 0)} مصدر`, 'success');
+        updateProgressBar(100);
+        setTimeout(() => {
+            hideProgressBar();
+            setSearchButtonLoading(false);
+        }, 500);
+
+        setTimeout(() => {
+            renderSourcesPage(report);
+            switchTab('sources');
+        }, 1000);
+    };
+
     sse.addEventListener('complete', e => {
         try {
-            if (window.searchTimerInterval) {
-                clearInterval(window.searchTimerInterval);
-                window.searchTimerInterval = null;
-            }
-
             const report = JSON.parse(e.data);
-            currentSearchData = report;
-
-            scheduleRender(report);
-
-            const activeStatus = document.getElementById('searchActiveStatus');
-            const resultsContainer = document.getElementById('searchResultsCountContainer');
-            if (activeStatus) activeStatus.style.display = 'none';
-            if (resultsContainer) resultsContainer.style.display = 'inline-block';
-
-            const elapsedVal = (Date.now() - searchStartTime) / 1000;
-            const elapsed = Math.max(0.1, elapsedVal).toFixed(1);
-            document.getElementById('searchTime').textContent = elapsed;
-            document.getElementById('resultsCount').textContent = formatScaryCount(report.total_results || 0);
-
-            updateTreeNode('verification', 'success', 'التقرير جاهز', null);
-            setStatusDot('idle', 'Done');
-            window.RootSearchState.streamStatus = 'complete';
-
-            showToast(`تم العثور على ${formatScaryCount(report.total_results || 0)} مصدر`, 'success');
-            updateProgressBar(100);
-            setTimeout(() => {
-                hideProgressBar();
-                setSearchButtonLoading(false);
-            }, 500);
-
-            setTimeout(() => {
-                renderSourcesPage(report);
-                switchTab('sources');
-            }, 1000);
-
+            handleStreamComplete(report);
         } catch (err) {
             console.error("Error handling SSE complete event:", err);
             setSearchButtonLoading(false);
@@ -1126,8 +1297,18 @@ function startSSEStream(query, model, attempt = 0) {
         }
     });
 
+    sse.addEventListener('done', e => {
+        streamDone = true;
+        try { sse.close(); } catch (_) {}
+        activeSSE = null;
+    });
+
     sse.addEventListener('error', e => {
         if (!e || !e.data) return;
+        try {
+            const errObj = JSON.parse(e.data);
+            if (errObj.message) showToast(`خطأ الدفق: ${errObj.message}`, 'error');
+        } catch (_) {}
         streamDone = true;
         setSearchButtonLoading(false);
         hideProgressBar();
@@ -1144,13 +1325,14 @@ function startSSEStream(query, model, attempt = 0) {
         activeSSE = null;
 
         if (attempt < MAX_RECONNECTS) {
-            const backoffMs = Math.min(8000, 1000 * Math.pow(2, attempt));
+            const delayMs = delays[attempt] || 3000;
             setStatusDot('live', `Reconnecting (${attempt + 1}/${MAX_RECONNECTS})...`);
+            showToast('⚠️ جاري إعادة الاتصال بدفق البحث...', 'info', 2500);
             if (window._sseReconnectTimer) clearTimeout(window._sseReconnectTimer);
             window._sseReconnectTimer = setTimeout(() => {
                 window._sseReconnectTimer = null;
                 startSSEStream(query, model, attempt + 1);
-            }, backoffMs);
+            }, delayMs);
             return;
         }
 

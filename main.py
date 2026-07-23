@@ -189,9 +189,15 @@ class RootSearch:
         return await self.deep_search(query, model="fathom_s1", deep_analysis=False)
     
     async def close(self):
-        """تنظيف الموارد"""
-        await self.search_engine.close()
-        await self.scraper.close()
+        """تنظيف الموارد بالكامل ومنع تسريب الاتصالات"""
+        try:
+            await self.search_engine.close()
+        except Exception as e:
+            logger.warning(f"Error closing search engine: {e}")
+        try:
+            await self.scraper.close()
+        except Exception as e:
+            logger.warning(f"Error closing scraper: {e}")
 
 
 def main():

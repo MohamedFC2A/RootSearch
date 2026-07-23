@@ -63,8 +63,8 @@ async def test_rootsearch_pipeline_end_to_end(query):
 
         assert len(chunks) > 0
         full_stream = "".join(chunks)
-        assert "[[METADATA_START]]" in full_stream
-        assert "[[METADATA_END]]" in full_stream
+        assert "metadata" in full_stream
+        assert "citations" in full_stream
 
 # =====================================================================
 # 2. Prompt Injection Defense (15+ Assertions)

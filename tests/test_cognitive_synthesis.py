@@ -110,14 +110,10 @@ async def test_grounded_ai_synthesizer_stream_metadata(source_count):
 
     full_response = "".join(stream_output)
     
-    # Assert metadata header block existence
-    assert "[[METADATA_START]]" in full_response
-    assert "[[METADATA_END]]" in full_response
-
-    # Parse metadata header JSON
-    match = re.search(r'\[\[METADATA_START\]\](.*?)\[\[METADATA_END\]\]', full_response, re.DOTALL)
-    assert match is not None
-    meta_json = json.loads(match.group(1))
+    # Assert structured metadata JSON header existence
+    header = stream_output[0]
+    meta_json = json.loads(header)
+    assert meta_json.get("event") == "metadata"
     assert "citations" in meta_json
     citations = meta_json["citations"]
     assert len(citations) == source_count

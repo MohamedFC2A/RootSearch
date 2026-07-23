@@ -213,8 +213,8 @@ class TestPromptAndSynthesizer(unittest.IsolatedAsyncioTestCase):
             stream_tokens.append(token)
 
         full_output = "".join(stream_tokens)
-        self.assertIn("[[METADATA_START]]", full_output)
-        self.assertIn("[[METADATA_END]]", full_output)
+        self.assertIn("metadata", full_output)
+        self.assertIn("citations", full_output)
         self.assertIn("https://example.com/1", full_output)
 
 
