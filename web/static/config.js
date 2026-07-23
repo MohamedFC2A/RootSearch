@@ -16,30 +16,36 @@
     host === "0.0.0.0" ||
     host === "";
 
-  // محليًا: نفس الأصل (فارغ) — على Vercel: رابط النفق المباشر
+  async function fetchBackendUrl() {
+    if (isLocal) {
+      window.API_BASE = "";
+      return "";
+    }
+    try {
+      const response = await fetch("https://keyvalue.immanuel.co/api/KeyVal/GetValue/" + APP_KEY + "/" + KEY + "?t=" + Date.now(), { cache: "no-store" });
+      const encodedUrl = await response.json();
+      if (encodedUrl && encodedUrl !== "null") {
+        const decodedUrl = atob(encodedUrl).trim();
+        if (decodedUrl.startsWith("http")) {
+          window.API_BASE = decodedUrl;
+          console.log("[RootSearch] Loaded dynamic backend URL:", decodedUrl);
+          return decodedUrl;
+        }
+      }
+    } catch (err) {
+      console.error("[RootSearch] Failed to fetch dynamic backend URL:", err);
+    }
+    return window.API_BASE || "";
+  }
+
+  window.refreshBackendUrl = fetchBackendUrl;
+
   if (isLocal) {
     window.API_BASE = "";
     window.API_BASE_PROMISE = Promise.resolve("");
   } else {
     window.API_BASE = "";
-    window.API_BASE_PROMISE = (async function () {
-      try {
-        const response = await fetch("https://keyvalue.immanuel.co/api/KeyVal/GetValue/" + APP_KEY + "/" + KEY + "?t=" + Date.now(), { cache: "no-store" });
-        const encodedUrl = await response.json();
-        if (encodedUrl && encodedUrl !== "null") {
-          // فك تشفير Base64 للرابط
-          const decodedUrl = atob(encodedUrl).trim();
-          if (decodedUrl.startsWith("http")) {
-            window.API_BASE = decodedUrl;
-            console.log("[RootSearch] Loaded dynamic backend URL:", decodedUrl);
-            return decodedUrl;
-          }
-        }
-      } catch (err) {
-        console.error("[RootSearch] Failed to fetch dynamic backend URL:", err);
-      }
-      return window.API_BASE || "";
-    })();
+    window.API_BASE_PROMISE = fetchBackendUrl();
   }
 
   window.STREAM_CONFIG = {

@@ -72,6 +72,26 @@ _origins_env = os.getenv("ALLOWED_ORIGINS", "*").strip()
 _allow_origins = ["*"] if _origins_env == "*" else [
     o.strip() for o in _origins_env.split(",") if o.strip()
 ]
+
+@app.middleware("http")
+async def add_universal_cors_headers(request: Request, call_next):
+    """Ensure CORS headers are injected into EVERY response including errors & preflights."""
+    origin = request.headers.get("origin", "*")
+    if request.method == "OPTIONS":
+        response = JSONResponse({"status": "ok"}, status_code=200)
+    else:
+        try:
+            response = await call_next(request)
+        except Exception as exc:
+            response = JSONResponse({"error": str(exc), "status": "error"}, status_code=500)
+
+    response.headers["Access-Control-Allow-Origin"] = origin if origin and origin != "null" else "*"
+    response.headers["Access-Control-Allow-Credentials"] = "true"
+    response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS, HEAD, PATCH"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Requested-With, Accept, Origin, ngrok-skip-browser-warning, bypass-tunnel-reminder, X-Session-ID, Cache-Control"
+    response.headers["Access-Control-Expose-Headers"] = "*"
+    return response
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -80,6 +100,18 @@ app.add_middleware(
     allow_headers=["*"],
     expose_headers=["*"],
 )
+
+@app.options("/{full_path:path}")
+async def options_handler(full_path: str, request: Request):
+    """Catch-all route for OPTIONS preflight requests."""
+    origin = request.headers.get("origin", "*")
+    res = JSONResponse({"status": "ok"}, status_code=200)
+    res.headers["Access-Control-Allow-Origin"] = origin if origin and origin != "null" else "*"
+    res.headers["Access-Control-Allow-Credentials"] = "true"
+    res.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS, HEAD, PATCH"
+    res.headers["Access-Control-Allow-Headers"] = "*"
+    res.headers["Access-Control-Expose-Headers"] = "*"
+    return res
 
 from fastapi.exceptions import RequestValidationError
 
@@ -877,6 +909,15 @@ async def api_explain_keyword(
     except Exception:
         print(f"[EXPLAIN ERROR] {traceback.format_exc()}")
         return JSONResponse({"error": "فشل تفسير الكلمة", "status": "error"}, status_code=500)
+
+
+@app.get("/api/health")
+async def api_health():
+    return JSONResponse({
+        "status": "ok",
+        "health": "healthy",
+        "timestamp": datetime.now().isoformat(),
+    })
 
 
 @app.get("/api/status")

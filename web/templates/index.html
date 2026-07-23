@@ -67,8 +67,11 @@
             </div>
         </div>
         <div class="diagnostic-actions">
-            <a id="diagnosticBypassBtn" href="#" target="_blank" class="diagnostic-btn">
-                <i class="fas fa-external-link-alt"></i> تفعيل الاتصال
+            <button onclick="refreshConnectionUrl()" class="diagnostic-btn">
+                <i class="fas fa-link"></i> تحديث رابط السيرفر
+            </button>
+            <a id="diagnosticBypassBtn" href="#" target="_blank" class="diagnostic-btn secondary">
+                <i class="fas fa-external-link-alt"></i> تفعيل الاتصال المباشر
             </a>
             <button onclick="retryConnection()" class="diagnostic-btn secondary">
                 <i class="fas fa-sync-alt"></i> إعادة التحقق

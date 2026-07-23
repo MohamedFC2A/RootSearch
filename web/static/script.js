@@ -493,9 +493,14 @@ function showToast(message, type = 'info', duration = 4500) {
 }
 
 // ─── SYSTEM DIAGNOSTICS & RETRY ───────────────────────────────
-async function loadSystemStatus() {
+const FETCH_TUNNEL_HEADERS = {
+    'ngrok-skip-browser-warning': '69420',
+    'bypass-tunnel-reminder': 'true'
+};
+
+async function loadSystemStatus(allowAutoRefresh = true) {
     try {
-        const res = await fetch(`${API_BASE}/api/status`);
+        const res = await fetch(`${API_BASE}/api/status`, { headers: FETCH_TUNNEL_HEADERS });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
         if (data.fathom_s1_max_sources) systemLimits.fathom_s1_max_sources = data.fathom_s1_max_sources;
@@ -506,6 +511,13 @@ async function loadSystemStatus() {
         const banner = document.getElementById('diagnosticBanner');
         if (banner) banner.style.display = 'none';
     } catch (err) {
+        if (allowAutoRefresh && typeof window.refreshBackendUrl === 'function') {
+            console.warn('[RootSearch] Initial status check failed, attempting auto-refresh of backend URL from KV store...');
+            const newUrl = await window.refreshBackendUrl();
+            if (newUrl) {
+                return loadSystemStatus(false);
+            }
+        }
         runSystemDiagnostics(err);
     }
 }
@@ -525,7 +537,7 @@ async function retryConnection() {
     const banner = document.getElementById('diagnosticBanner');
     setStatusDot('idle', 'Rechecking...');
     try {
-        const res = await fetch(`${API_BASE}/api/status`);
+        const res = await fetch(`${API_BASE}/api/status`, { headers: FETCH_TUNNEL_HEADERS });
         if (res.ok) {
             const data = await res.json();
             if (data.fathom_s1_max_sources) systemLimits.fathom_s1_max_sources = data.fathom_s1_max_sources;
@@ -538,9 +550,36 @@ async function retryConnection() {
             throw new Error(`Server returned HTTP ${res.status}`);
         }
     } catch (err) {
+        if (typeof window.refreshBackendUrl === 'function') {
+            console.warn('[RootSearch] Retry status check failed, refreshing KV store URL...');
+            const newUrl = await window.refreshBackendUrl();
+            if (newUrl) {
+                try {
+                    const retryRes = await fetch(`${API_BASE}/api/status`, { headers: FETCH_TUNNEL_HEADERS });
+                    if (retryRes.ok) {
+                        const data = await retryRes.json();
+                        if (data.fathom_s1_max_sources) systemLimits.fathom_s1_max_sources = data.fathom_s1_max_sources;
+                        if (data.fathom_max_nodes) systemLimits.fathom_max_nodes = data.fathom_max_nodes;
+                        updateEngineCounter();
+                        setStatusDot('idle', 'Ready');
+                        if (banner) banner.style.display = 'none';
+                        showToast('✅ تم الاتصال بنجاح بالسيرفر بعد تحديث رابط النفق!', 'success');
+                        return;
+                    }
+                } catch (_) {}
+            }
+        }
         runSystemDiagnostics(err);
-        showToast('❌ فشل الاتصال بالخادم من جديد', 'error');
+        showToast('❌ فشل الاتصال بالخادم. يرجى التأكد من تشغيل python launch_backend.py محلياً.', 'error');
     }
+}
+
+async function refreshConnectionUrl() {
+    showToast('🔄 جاري الاستعلام عن أحدث رابط للسيرفر من مخزن المفاتيح...', 'info');
+    if (typeof window.refreshBackendUrl === 'function') {
+        await window.refreshBackendUrl();
+    }
+    await retryConnection();
 }
 
 function setStatusDot(state, label = '') {

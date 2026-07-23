@@ -25,7 +25,11 @@ def update_key_value(url: str):
         with urllib.request.urlopen(req, timeout=10) as response:
             result = response.read().decode("utf-8").strip()
             if result.lower() == "true":
-                print(f"[KV STORE] Successfully updated database with URL: {url}")
+                print("\n" + "=" * 60)
+                print(f"[KV STORE] ✅ Successfully registered dynamic tunnel URL in KV store!")
+                print(f"[KV STORE] Active Tunnel URL: {url}")
+                print(f"[KV STORE] Vercel App: https://root-search.vercel.app")
+                print("=" * 60 + "\n")
             else:
                 print(f"[KV STORE] Warning: Server returned '{result}' when saving URL.")
     except Exception as e:

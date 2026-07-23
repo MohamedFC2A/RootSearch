@@ -61,11 +61,33 @@ class TestCompatibilityAndWebAPI(unittest.IsolatedAsyncioTestCase):
     def test_cors_middleware_headers(self):
         """Test CORS headers permit origin requests."""
         response = self.client.options("/api/health", headers={
-            "Origin": "https://example.com",
+            "Origin": "https://root-search.vercel.app",
             "Access-Control-Request-Method": "GET"
         })
         self.assertEqual(response.status_code, 200)
         self.assertIn("access-control-allow-origin", response.headers)
+
+    def test_cors_headers_on_status_get(self):
+        """Test GET /api/status returns proper CORS headers for Vercel origin."""
+        response = self.client.get("/api/status", headers={
+            "Origin": "https://root-search.vercel.app"
+        })
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("access-control-allow-origin", response.headers)
+
+    def test_cors_headers_on_options_catchall(self):
+        """Test OPTIONS preflight catch-all returns 200 OK with CORS headers."""
+        response = self.client.options("/api/search/stream", headers={
+            "Origin": "https://root-search.vercel.app"
+        })
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("access-control-allow-origin", response.headers)
+
+    def test_health_endpoint(self):
+        """Test /api/health endpoint returns healthy status."""
+        response = self.client.get("/api/health")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json().get("status"), "ok")
 
 
 if __name__ == '__main__':
